@@ -266,7 +266,7 @@ const Outbound: React.FC = () => {
               <div className="text-sm text-slate-600 mt-2 space-y-1">
                 <div>
                   <span className="font-semibold text-slate-800">주문자:</span>{" "}
-                  {activeOrder.customerName || "-"}
+                  {(activeOrder as any).name ?? (activeOrder as any).receiver ?? "-"}
                 </div>
 
                 <div>
