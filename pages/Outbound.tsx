@@ -254,11 +254,37 @@ const Outbound: React.FC = () => {
               <div className="h-14 w-14 bg-amber-100 rounded-full flex items-center justify-center text-amber-600">
                 <Truck size={28} />
               </div>
-              <div>
-                <p className="text-sm text-slate-500 font-medium">Processing Order</p>
-                <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{activeOrder.tracking}</h2>
-                <p className="text-xs text-slate-400 mt-1">Customer: {activeOrder.customerName} | ID: {activeOrder.id}</p>
+            <div className="space-y-1">
+              <p className="text-sm text-slate-500 font-medium">
+                Processing Order
+              </p>
+
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+                {activeOrder.tracking}
+              </h2>
+
+              <div className="text-sm text-slate-600 mt-2 space-y-1">
+                <div>
+                  <span className="font-semibold text-slate-800">주문자:</span>{" "}
+                  {activeOrder.customerName || "-"}
+                </div>
+
+                <div>
+                  <span className="font-semibold text-slate-800">연락처:</span>{" "}
+                  {(activeOrder as any).phone || "-"}
+                </div>
+
+                <div>
+                  <span className="font-semibold text-slate-800">배송지:</span>{" "}
+                  {(activeOrder as any).address || "-"}
+                </div>
+
+                <div>
+                  <span className="font-semibold text-slate-800">주문번호:</span>{" "}
+                  {activeOrder.id}
+                </div>
               </div>
+            </div>
             </div>
             
             {/* Progress Bar */}
