@@ -1,5 +1,5 @@
 import { inventoryService } from "../services/inventoryService";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
 import React, { useState, useRef, useEffect } from 'react';
 import { Order, OrderItem } from '../types';
@@ -51,15 +51,11 @@ const Outbound: React.FC = () => {
         },
         (decodedText) => {
           const cleaned = decodedText.replace(/\D/g, "");
-          setTrackingInput(cleaned);
+
           setIsCameraOpen(false);
           html5QrCode.stop();
-        
-          // 🔥 자동 엔터 실행
-          setTimeout(() => {
-            const form = document.getElementById("tracking-form") as HTMLFormElement | null;
-            form?.requestSubmit();
-          }, 150);
+
+          processTrackingSearch(cleaned); // 🔥 React 방식 직접 실행
         },
         () => {}
       );
@@ -84,31 +80,35 @@ const Outbound: React.FC = () => {
     }
   }, [activeOrder]);
 
-  const handleTrackingSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const processTrackingSearch = async (tracking: string) => {
     setErrorMsg(null);
-  
-    if (!trackingInput.trim()) return;
-  
-    const docRef = doc(db, "orders", trackingInput.trim());
-    const snap = await getDoc(docRef);
-  
-    if (!snap.exists()) {
+
+    if (!tracking.trim()) return;
+
+    const q = query(
+      collection(db, "orders"),
+      where("trackingNumber", "==", tracking.trim())
+    );
+
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
       setErrorMsg("주문 정보를 찾을 수 없습니다.");
       setActiveOrder(null);
       return;
     }
-  
-    const orderData = { id: snap.id, ...snap.data() } as Order;
-  
+
+    const docSnap = snapshot.docs[0];
+    const orderData = { id: docSnap.id, ...docSnap.data() } as Order;
+
     if (orderData.status === "COMPLETED") {
       setErrorMsg("이미 출고 완료된 주문입니다.");
       setActiveOrder(null);
       return;
     }
-  
+
     setActiveOrder(orderData);
-  
+
     setItemsState(
       orderData.items.map((item: any) => ({
         sku: item.sku,
@@ -117,8 +117,13 @@ const Outbound: React.FC = () => {
         scannedQty: 0
       }))
     );
-  
+
     setTrackingInput("");
+  };
+
+  const handleTrackingSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await processTrackingSearch(trackingInput);
   };
 
   const handleProductScan = (sku: string) => {
