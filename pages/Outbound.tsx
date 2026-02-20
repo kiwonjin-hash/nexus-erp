@@ -50,10 +50,16 @@ const Outbound: React.FC = () => {
           ]
         },
         (decodedText) => {
-          const cleaned = decodedText.replace(/\D/g, ""); // 숫자만 추출 (우체국 13자리 대응)
+          const cleaned = decodedText.replace(/\D/g, "");
           setTrackingInput(cleaned);
           setIsCameraOpen(false);
           html5QrCode.stop();
+        
+          // 🔥 자동 엔터 실행
+          setTimeout(() => {
+            const form = document.getElementById("tracking-form") as HTMLFormElement | null;
+            form?.requestSubmit();
+          }, 150);
         },
         () => {}
       );
@@ -193,7 +199,7 @@ const Outbound: React.FC = () => {
           <div className="w-full max-w-xl text-center">
             <h2 className="text-2xl font-bold text-slate-800 mb-2">운송장 스캔</h2>
             <p className="text-slate-500 mb-6">바코드 스캐너를 사용하여 운송장을 스캔하세요.</p>
-            <form onSubmit={handleTrackingSearch} className="relative">
+            <form id="tracking-form" onSubmit={handleTrackingSearch} className="relative">
               <Scan className="absolute left-4 top-4 text-slate-400" />
               <input 
                 type="text" 
