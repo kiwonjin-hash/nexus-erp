@@ -52,10 +52,9 @@ const Outbound: React.FC = () => {
         (decodedText) => {
           const cleaned = decodedText.replace(/\D/g, "");
 
+          setTrackingInput(cleaned); // 🔥 input 값 세팅
           setIsCameraOpen(false);
           html5QrCode.stop();
-
-          processTrackingSearch(cleaned); // 🔥 React 방식 직접 실행
         },
         () => {}
       );
@@ -80,6 +79,14 @@ const Outbound: React.FC = () => {
     }
   }, [activeOrder]);
 
+  useEffect(() => {
+    const cleaned = trackingInput.replace(/\D/g, "");
+
+    if (cleaned.length === 13) {
+      processTrackingSearch(cleaned);
+    }
+  }, [trackingInput]);
+
   const processTrackingSearch = async (tracking: string) => {
     setErrorMsg(null);
 
@@ -87,7 +94,7 @@ const Outbound: React.FC = () => {
 
     const q = query(
       collection(db, "orders"),
-      where("trackingNumber", "==", tracking.trim())
+      where("tracking", "==", tracking.trim())
     );
 
     const snapshot = await getDocs(q);
