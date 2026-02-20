@@ -14,7 +14,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 const Outbound: React.FC = () => {
   const [trackingInput, setTrackingInput] = useState('');
@@ -40,10 +40,18 @@ const Outbound: React.FC = () => {
         { facingMode: "environment" },
         {
           fps: 10,
-          qrbox: 250,
+          qrbox: { width: 300, height: 150 }, // 가로형 바코드 최적화
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.QR_CODE
+          ]
         },
         (decodedText) => {
-          setTrackingInput(decodedText);
+          const cleaned = decodedText.replace(/\D/g, ""); // 숫자만 추출 (우체국 13자리 대응)
+          setTrackingInput(cleaned);
           setIsCameraOpen(false);
           html5QrCode.stop();
         },
