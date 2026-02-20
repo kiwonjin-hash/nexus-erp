@@ -22,6 +22,7 @@ const Outbound: React.FC = () => {
   const [itemsState, setItemsState] = useState<OrderItem[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const cameraRef = useRef<HTMLDivElement>(null);
@@ -82,8 +83,11 @@ const Outbound: React.FC = () => {
   useEffect(() => {
     const cleaned = trackingInput.replace(/\D/g, "");
 
-    if (cleaned.length === 13) {
-      processTrackingSearch(cleaned);
+    if (cleaned.length === 13 && !isSearching) {
+      setIsSearching(true);
+      processTrackingSearch(cleaned).finally(() => {
+        setIsSearching(false);
+      });
     }
   }, [trackingInput]);
 
@@ -124,8 +128,6 @@ const Outbound: React.FC = () => {
         scannedQty: 0
       }))
     );
-
-    setTrackingInput("");
   };
 
   const handleTrackingSearch = async (e: React.FormEvent) => {
