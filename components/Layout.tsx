@@ -26,14 +26,14 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
   ];
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-10">
         <div className="p-6 border-b border-slate-700 flex items-center gap-3">
           <div className="w-8 h-8 bg-amber-600 rounded-md flex items-center justify-center shadow-lg shadow-amber-900/50">
             <Boxes size={20} className="text-white" />
           </div>
-          <span className="font-bold text-xl tracking-tight">NEXUS<span className="text-amber-500">ERP</span></span>
+          <span className="font-bold text-xl tracking-tight">Y-Gold<span className="text-amber-500">ERP</span></span>
         </div>
 
         <nav className="flex-1 py-6 px-3 space-y-1">
@@ -69,7 +69,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-h-0 relative">
         {/* Header (Optional sticky header for title/user info) */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm shrink-0">
           <h1 className="text-lg font-semibold text-slate-800">
@@ -86,8 +86,8 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
         </header>
 
         {/* Content Scroll Area */}
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-7xl mx-auto h-full">
+        <div className="flex-1 min-h-0 overflow-y-auto p-8">
+          <div className="max-w-7xl mx-auto">
             {children}
           </div>
         </div>

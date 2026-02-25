@@ -26,9 +26,6 @@ const Outbound: React.FC = () => {
 
   const [deliveryMode, setDeliveryMode] = useState<"NORMAL" | "VALEX" | "PICKUP">("NORMAL");
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
-  const [orderSearch, setOrderSearch] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const cameraRef = useRef<HTMLDivElement>(null);
@@ -85,6 +82,25 @@ const Outbound: React.FC = () => {
       scanInputRef.current.focus();
     }
   }, [activeOrder]);
+
+  useEffect(() => {
+    // Reset common state
+    setActiveOrder(null);
+    setItemsState([]);
+    setTrackingInput("");
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    // Clear pending list first
+    setPendingOrders([]);
+
+    // Load orders depending on mode
+    if (deliveryMode === "VALEX") {
+      loadValexOrders();
+    } else if (deliveryMode === "PICKUP") {
+      loadPickupOrders();
+    }
+  }, [deliveryMode]);
 
   useEffect(() => {
     const cleaned = trackingInput.replace(/\D/g, "");
@@ -254,15 +270,7 @@ const Outbound: React.FC = () => {
       setSuccessMsg(`주문 ${activeOrder.tracking} 출고 처리가 완료되었습니다.`);
       setActiveOrder(null);
       setItemsState([]);
-      setTrackingInput(""); // 🔥 출고 완료 후 운송장 입력값 초기화
-
-      // 🔥 배송 모드에 따라 리스트 새로고침
-      if (deliveryMode === "VALEX") {
-        loadValexOrders();
-      } else if (deliveryMode === "PICKUP") {
-        loadPickupOrders();
-      }
-
+      setTrackingInput("");
       setTimeout(() => setSuccessMsg(null), 4000);
     }
   };
@@ -272,23 +280,6 @@ const Outbound: React.FC = () => {
   const totalScanned = itemsState.reduce((acc, curr) => acc + curr.scannedQty, 0);
   const progressPercent = totalRequired > 0 ? Math.min(100, (totalScanned / totalRequired) * 100) : 0;
 
-  // Derived variables for searching and pagination
-  const filteredOrders = pendingOrders.filter((order) => {
-    const keyword = orderSearch.toLowerCase();
-    return (
-      (order.name && order.name.toLowerCase().includes(keyword)) ||
-      (order.receiver && order.receiver.toLowerCase().includes(keyword)) ||
-      (order.order_no && String(order.order_no).includes(keyword)) ||
-      (order.phone && String(order.phone).includes(keyword))
-    );
-  });
-
-  const totalPages = Math.ceil(filteredOrders.length / pageSize);
-  const paginatedOrders = filteredOrders.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
-
   return (
     <div className="h-full flex flex-col gap-6">
 
@@ -297,9 +288,6 @@ const Outbound: React.FC = () => {
         <button
           onClick={() => {
             setDeliveryMode("NORMAL");
-            setActiveOrder(null);
-            setItemsState([]);
-            setPendingOrders([]);
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${
             deliveryMode === "NORMAL"
@@ -313,9 +301,6 @@ const Outbound: React.FC = () => {
         <button
           onClick={() => {
             setDeliveryMode("VALEX");
-            setActiveOrder(null);
-            setItemsState([]);
-            loadValexOrders();
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${
             deliveryMode === "VALEX"
@@ -329,9 +314,6 @@ const Outbound: React.FC = () => {
         <button
           onClick={() => {
             setDeliveryMode("PICKUP");
-            setActiveOrder(null);
-            setItemsState([]);
-            loadPickupOrders();
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${
             deliveryMode === "PICKUP"
@@ -344,12 +326,7 @@ const Outbound: React.FC = () => {
       </div>
       
       {/* 1. Top Section: Tracking Input */}
-      <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center justify-center min-h-[160px] relative">
-        {successMsg && (
-          <div className="absolute top-4 right-4 bg-green-100 border border-green-400 text-green-700 px-4 py-2 rounded-lg shadow text-sm font-medium">
-            {successMsg}
-          </div>
-        )}
+      <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center justify-center min-h-[160px]">
         {!activeOrder && deliveryMode === "NORMAL" ? (
           <div className="w-full max-w-xl text-center">
             <h2 className="text-2xl font-bold text-slate-800 mb-2">운송장 스캔</h2>
@@ -395,26 +372,13 @@ const Outbound: React.FC = () => {
               {deliveryMode === "VALEX" ? "발렉스 출고 대기 주문" : "방문수령 대기 주문"}
             </h2>
 
-            <div className="mb-4">
-              <input
-                type="text"
-                value={orderSearch}
-                onChange={(e) => {
-                  setOrderSearch(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="이름 / 주문번호 / 연락처 검색"
-                className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
-            </div>
-
-            {filteredOrders.length === 0 && (
+            {pendingOrders.length === 0 && (
               <div className="text-slate-500 text-sm">
                 출고 대기 주문이 없습니다.
               </div>
             )}
 
-            {paginatedOrders.map((order: any) => (
+            {pendingOrders.map((order: any) => (
               <div
                 key={order.id}
                 onClick={() => {
@@ -450,23 +414,6 @@ const Outbound: React.FC = () => {
                 </div>
               </div>
             ))}
-            {totalPages > 1 && (
-              <div className="flex justify-center gap-2 mt-4">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`px-3 py-1 rounded-md text-sm ${
-                      currentPage === page
-                        ? "bg-amber-500 text-white"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         ) : (
           <div className="w-full flex items-center justify-between">

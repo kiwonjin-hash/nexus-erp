@@ -7,27 +7,109 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 const Dashboard: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [lowStockItems, setLowStockItems] = useState<Product[]>([]);
+  const [todayInbound, setTodayInbound] = useState(0);
+  const [todayOutbound, setTodayOutbound] = useState(0);
+  const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchData = async () => {
       const allProducts = await inventoryService.getProducts();
       setProducts(allProducts);
-      setLowStockItems(allProducts.filter(p => p.currentStock <= p.minStockLevel));
+
+      setLowStockItems(
+        allProducts.filter((p: any) => {
+          const stock = p.stock ?? 0;
+          const threshold = p.lowStockThreshold ?? 10;
+          return stock <= threshold;
+        })
+      );
+
+      // 🔥 오늘 날짜 기준
+      const today = new Date();
+      const todayStr = today.toDateString();
+
+      // 🔥 입고 집계
+      const inboundLogs = await inventoryService.getInboundHistory();
+      let inboundSum = 0;
+
+      const todayStart = new Date();
+      todayStart.setHours(0,0,0,0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23,59,59,999);
+
+      inboundLogs.forEach((log: any) => {
+        if (!log.createdAt?.seconds) return;
+
+        const logDate = new Date(log.createdAt.seconds * 1000);
+        if (logDate >= todayStart && logDate <= todayEnd) {
+          inboundSum += log.quantity || 0;
+        }
+      });
+
+      setTodayInbound(inboundSum);
+
+      // 🔥 출고 집계
+      const outboundLogs = await inventoryService.getOutboundLogs();
+      let outboundSum = 0;
+
+      outboundLogs.forEach((log: any) => {
+        if (!log.createdAt?.seconds) return;
+
+        const logDate = new Date(log.createdAt.seconds * 1000);
+        if (logDate >= todayStart && logDate <= todayEnd) {
+          outboundSum += log.quantity || 0;
+        }
+      });
+
+      setTodayOutbound(outboundSum);
+
+      // 🔥 최근 7일 차트 집계
+      const daysMap: any = {};
+
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.toDateString();
+        daysMap[key] = {
+          name: d.toLocaleDateString('ko-KR', { weekday: 'short' }),
+          inbound: 0,
+          outbound: 0
+        };
+      }
+
+      inboundLogs.forEach((log: any) => {
+        if (!log.createdAt?.seconds) return;
+
+        const logDate = new Date(log.createdAt.seconds * 1000);
+        const key = logDate.toDateString();
+
+        if (daysMap[key]) {
+          daysMap[key].inbound += log.quantity || 0;
+        }
+      });
+
+      outboundLogs.forEach((log: any) => {
+        if (!log.createdAt?.seconds) return;
+
+        const logDate = new Date(log.createdAt.seconds * 1000);
+        const key = logDate.toDateString();
+
+        if (daysMap[key]) {
+          daysMap[key].outbound += log.quantity || 0;
+        }
+      });
+
+      setChartData(Object.values(daysMap));
     };
+
     fetchData();
   }, []);
 
-  const totalStock = products.reduce((acc, curr) => acc + curr.currentStock, 0);
-  const totalValue = products.reduce((acc, curr) => acc + (curr.currentStock * curr.price), 0);
+  const totalStock = products.reduce(
+    (acc, curr: any) => acc + (curr.stock || 0),
+    0
+  );
 
-  // Mock data for the chart
-  const chartData = [
-    { name: 'Mon', inbound: 40, outbound: 24 },
-    { name: 'Tue', inbound: 30, outbound: 13 },
-    { name: 'Wed', inbound: 20, outbound: 58 },
-    { name: 'Thu', inbound: 27, outbound: 39 },
-    { name: 'Fri', inbound: 18, outbound: 48 },
-  ];
 
   return (
     <div className="space-y-6">
@@ -50,7 +132,7 @@ const Dashboard: React.FC = () => {
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-start justify-between">
           <div>
             <p className="text-sm font-medium text-slate-500 mb-1">오늘 입고 예정</p>
-            <h3 className="text-3xl font-bold text-slate-900">142</h3>
+            <h3 className="text-3xl font-bold text-slate-900">{todayInbound}</h3>
             <p className="text-xs text-slate-400 mt-2">3건 처리 대기중</p>
           </div>
           <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
@@ -61,7 +143,7 @@ const Dashboard: React.FC = () => {
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-start justify-between">
           <div>
             <p className="text-sm font-medium text-slate-500 mb-1">오늘 출고 완료</p>
-            <h3 className="text-3xl font-bold text-slate-900">89</h3>
+            <h3 className="text-3xl font-bold text-slate-900">{todayOutbound}</h3>
             <p className="text-xs text-amber-600 mt-2 flex items-center font-medium">
               <TrendingDown size={14} className="mr-1" />
               피크 타임 진행중
@@ -77,8 +159,8 @@ const Dashboard: React.FC = () => {
         {/* Main Chart */}
         <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-800 mb-6">주간 입출고 현황</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="w-full min-h-[300px]">
+            <ResponsiveContainer width="100%" height={300}>
               <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis dataKey="name" tick={{fill: '#64748b'}} axisLine={false} tickLine={false} />
@@ -116,14 +198,14 @@ const Dashboard: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {lowStockItems.map((item) => (
                   <tr key={item.sku} className="hover:bg-slate-50">
-                    <div className="px-6 py-3">
+                    <td className="px-6 py-3">
                       <div className="font-medium text-slate-900">{item.name}</div>
                       <div className="text-xs text-slate-400">{item.sku}</div>
-                    </div>
+                    </td>
                     <td className="px-6 py-3 text-right">
-                      <span className="text-red-600 font-bold">{item.currentStock}</span>
+                      <span className="text-red-600 font-bold">{item.stock}</span>
                       <span className="text-slate-400 mx-1">/</span>
-                      <span className="text-slate-500">{item.minStockLevel}</span>
+                      <span className="text-slate-500">{item.lowStockThreshold}</span>
                     </td>
                   </tr>
                 ))}

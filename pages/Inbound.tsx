@@ -10,6 +10,9 @@ const Inbound: React.FC = () => {
   const [history, setHistory] = useState<InboundRecord[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
 
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+
   useEffect(() => {
     loadHistory();
   }, []);
@@ -17,6 +20,7 @@ const Inbound: React.FC = () => {
   const loadHistory = async () => {
     const data = await inventoryService.getInboundHistory();
     setHistory(data);
+    setPage(1);
   };
 
   const handleSkuSearch = async (val: string) => {
@@ -53,8 +57,14 @@ const Inbound: React.FC = () => {
     }
   };
 
+  const totalPages = Math.ceil(history.length / pageSize);
+  const paginatedHistory = history.slice(
+    (page - 1) * pageSize,
+    page * pageSize
+  );
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[calc(100vh-8rem)]">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-full min-h-0">
 
       {/* 왼쪽: 입고 등록 */}
       <div className="lg:col-span-1">
@@ -137,7 +147,7 @@ const Inbound: React.FC = () => {
       </div>
 
       {/* 오른쪽: 입고 이력 */}
-      <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col min-h-0">
 
         <div className="p-6 border-b border-slate-200 flex items-center gap-2">
           <Clock size={18} className="text-slate-400" />
@@ -146,7 +156,7 @@ const Inbound: React.FC = () => {
           </h3>
         </div>
 
-        <div className="overflow-auto">
+        <div className="flex-1 overflow-y-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
@@ -157,7 +167,7 @@ const Inbound: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {history.map((record) => (
+              {paginatedHistory.map((record) => (
                 <tr key={record.id}>
                   <td className="px-6 py-4">
                     {record.createdAt?.seconds
@@ -186,6 +196,24 @@ const Inbound: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {totalPages > 1 && (
+          <div className="p-4 border-t flex justify-center gap-2">
+            {Array.from({ length: totalPages }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => setPage(i + 1)}
+                className={`px-3 py-1 rounded text-sm font-semibold ${
+                  page === i + 1
+                    ? "bg-amber-600 text-white"
+                    : "bg-slate-100 hover:bg-slate-200"
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        )}
 
       </div>
     </div>
