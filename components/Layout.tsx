@@ -28,12 +28,12 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-10">
+      <aside className="w-64 bg-[#0e1a33] text-white flex flex-col shadow-2xl z-10">
         <div className="p-6 border-b border-slate-700 flex items-center gap-3">
-          <div className="w-8 h-8 bg-amber-600 rounded-md flex items-center justify-center shadow-lg shadow-amber-900/50">
-            <Boxes size={20} className="text-white" />
+          <div className="w-10 h-10 rounded-[0px] overflow-hidden flex items-center justify-center">
+            <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
           </div>
-          <span className="font-bold text-xl tracking-tight">Y-Gold<span className="text-amber-500">ERP</span></span>
+          <span className="font-bold text-xl tracking-tight">Yeouido<span className="text-orange-500">ERP</span></span>
         </div>
 
         <nav className="flex-1 py-6 px-3 space-y-1">
@@ -45,7 +45,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
                 onClick={() => onNavigate(item.id)}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200
                   ${isActive 
-                    ? 'bg-amber-600 text-white shadow-md shadow-amber-900/20' 
+                    ? 'bg-[#0e1a33] text-white' 
                     : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                   }`}
               >
