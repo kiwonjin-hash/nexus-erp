@@ -67,9 +67,7 @@ const Logs: React.FC = () => {
             await scanner.stop();
             setIsScannerOpen(false);
 
-            setTimeout(() => {
-              handleSearch();
-            }, 0);
+            handleSearch(decodedText);
           },
           () => {}
         );
@@ -141,8 +139,10 @@ const Logs: React.FC = () => {
     setHasMore(!!(data as any).lastVisible);
   };
 
-  const handleSearch = async () => {
-    if (!search.trim()) {
+  const handleSearch = async (overrideKeyword?: string) => {
+    const keyword = overrideKeyword ?? search;
+
+    if (!keyword.trim()) {
       setIsSearchMode(false);
       loadFirstPage();
       return;
