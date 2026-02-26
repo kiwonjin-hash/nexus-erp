@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { inventoryService } from "../services/inventoryService";
 (window as any).inventoryService = inventoryService;
 import { FileText, Camera } from "lucide-react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 type UnifiedLog = {
   id: string;
@@ -38,22 +38,48 @@ const Logs: React.FC = () => {
 
   const handleBarcodeScan = async () => {
     setIsScannerOpen(true);
-
-    const scanner = new Html5Qrcode("reader");
-    setScannerInstance(scanner);
-
-    await scanner.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: 250 },
-      (decodedText) => {
-        setSearch(decodedText);
-        setIsScannerOpen(false);
-        scanner.stop();
-        handleSearch();
-      },
-      () => {}
-    );
   };
+
+  useEffect(() => {
+    if (!isScannerOpen) return;
+
+    const startScanner = async () => {
+      const scanner = new Html5Qrcode("reader");
+      setScannerInstance(scanner);
+
+      try {
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 300, height: 150 },
+            formatsToSupport: [
+              Html5QrcodeSupportedFormats.CODE_128,
+              Html5QrcodeSupportedFormats.CODE_39,
+              Html5QrcodeSupportedFormats.EAN_13,
+              Html5QrcodeSupportedFormats.EAN_8,
+              Html5QrcodeSupportedFormats.QR_CODE
+            ]
+          },
+          async (decodedText) => {
+            setSearch(decodedText);
+
+            await scanner.stop();
+            setIsScannerOpen(false);
+
+            setTimeout(() => {
+              handleSearch();
+            }, 0);
+          },
+          () => {}
+        );
+      } catch (err) {
+        console.error("Scanner start failed:", err);
+      }
+    };
+
+    startScanner();
+  }, [isScannerOpen]);
 
   const fetchSearchPage = async (
     pageNumber: number,

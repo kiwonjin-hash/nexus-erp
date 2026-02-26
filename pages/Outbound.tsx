@@ -451,20 +451,67 @@ const Outbound: React.FC = () => {
               </div>
             ))}
             {totalPages > 1 && (
-              <div className="flex justify-center gap-2 mt-4">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+              <div className="flex justify-center items-center gap-2 mt-4 flex-wrap pb-2 text-sm">
+                {/* 이전 버튼 */}
+                {currentPage > 1 && (
                   <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`px-3 py-1 rounded-md text-sm ${
-                      currentPage === page
-                        ? "bg-amber-500 text-white"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
+                    onClick={() => setCurrentPage(currentPage - 1)}
+                    className="px-2 py-1 text-slate-600 hover:text-black"
                   >
-                    {page}
+                    ◀ 이전
                   </button>
-                ))}
+                )}
+
+                {(() => {
+                  const pages: (number | string)[] = [];
+
+                  const start = Math.max(1, currentPage - 2);
+                  const end = Math.min(totalPages, currentPage + 2);
+
+                  if (start > 1) {
+                    pages.push(1);
+                    if (start > 2) pages.push("...");
+                  }
+
+                  for (let i = start; i <= end; i++) {
+                    pages.push(i);
+                  }
+
+                  if (end < totalPages) {
+                    if (end < totalPages - 1) pages.push("...");
+                    pages.push(totalPages);
+                  }
+
+                  return pages.map((page, idx) =>
+                    page === "..." ? (
+                      <span key={`ellipsis-${idx}`} className="px-2 text-slate-400">
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page as number)}
+                        className={`px-3 py-1 ${
+                          currentPage === page
+                            ? "border-b-2 border-black font-semibold text-black"
+                            : "text-slate-600 hover:text-black"
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    )
+                  );
+                })()}
+
+                {/* 다음 버튼 */}
+                {currentPage < totalPages && (
+                  <button
+                    onClick={() => setCurrentPage(currentPage + 1)}
+                    className="px-2 py-1 text-slate-600 hover:text-black"
+                  >
+                    다음 ▶
+                  </button>
+                )}
               </div>
             )}
           </div>
