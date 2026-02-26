@@ -135,9 +135,14 @@ class InventoryService {
   async completeOrder(orderId: string, items: { sku: string; qty: number }[]) {
     try {
       for (const item of items) {
-        const productRef = doc(db, "inventory", item.sku.trim().toUpperCase());
+        const normalizedSku = item.sku.trim().toUpperCase();
+        const qty = Number(item.qty) || 0; // 수량이 없으면 0 처리
+
+        const productRef = doc(db, "inventory", normalizedSku);
+
+        // 🔥 재고 부족이어도 막지 않고 그대로 차감 (마이너스 허용)
         await updateDoc(productRef, {
-          stock: increment(-item.qty)
+          stock: increment(-qty)
         });
       }
 

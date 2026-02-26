@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { inventoryService } from "../services/inventoryService";
 (window as any).inventoryService = inventoryService;
-import { FileText } from "lucide-react";
+import { FileText, Camera } from "lucide-react";
+import { Html5Qrcode } from "html5-qrcode";
 
 type UnifiedLog = {
   id: string;
@@ -32,6 +33,27 @@ const Logs: React.FC = () => {
 
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [deliveryFilter, setDeliveryFilter] = useState<"ALL" | "POST" | "VALEX" | "PICKUP">("ALL");
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerInstance, setScannerInstance] = useState<Html5Qrcode | null>(null);
+
+  const handleBarcodeScan = async () => {
+    setIsScannerOpen(true);
+
+    const scanner = new Html5Qrcode("reader");
+    setScannerInstance(scanner);
+
+    await scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      (decodedText) => {
+        setSearch(decodedText);
+        setIsScannerOpen(false);
+        scanner.stop();
+        handleSearch();
+      },
+      () => {}
+    );
+  };
 
   const fetchSearchPage = async (
     pageNumber: number,
@@ -163,6 +185,14 @@ const Logs: React.FC = () => {
         >
           검색
         </button>
+
+        <button
+          onClick={handleBarcodeScan}
+          className="px-4 py-2 bg-slate-700 text-white rounded-lg flex items-center gap-2 hover:bg-slate-800"
+        >
+          <Camera size={16} />
+          스캔
+        </button>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -284,6 +314,25 @@ const Logs: React.FC = () => {
           </button>
         )}
       </div>
+
+      {isScannerOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-white w-full max-w-md rounded-xl p-4 relative">
+            <button
+              onClick={async () => {
+                if (scannerInstance) {
+                  await scannerInstance.stop();
+                }
+                setIsScannerOpen(false);
+              }}
+              className="absolute top-2 right-2 text-slate-500"
+            >
+              ✕
+            </button>
+            <div id="reader" className="w-full" />
+          </div>
+        </div>
+      )}
 
       {selectedLog && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
