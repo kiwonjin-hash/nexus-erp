@@ -1,5 +1,5 @@
 import { inventoryService } from "../services/inventoryService";
-import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { doc, getDoc, collection, collectionGroup, query, where, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
 import React, { useState, useRef, useEffect } from 'react';
 import { Order, OrderItem } from '../types';
@@ -103,7 +103,7 @@ const Outbound: React.FC = () => {
     if (!tracking.trim()) return;
 
     const q = query(
-      collection(db, "orders"),
+      collectionGroup(db, "shipments"),
       where("tracking", "==", tracking.trim()),
       where("deliveryType", "==", "POST"),
       where("status", "==", "READY")
@@ -118,7 +118,14 @@ const Outbound: React.FC = () => {
     }
 
     const docSnap = snapshot.docs[0];
-    const orderData = { id: docSnap.id, ...docSnap.data() } as Order;
+    const shipmentData: any = docSnap.data();
+    const orderRef = docSnap.ref.parent.parent;
+    const orderId = orderRef ? orderRef.id : "";
+
+    const orderData = {
+      id: orderId,
+      ...shipmentData
+    } as Order;
 
     if (orderData.status === "COMPLETED") {
       setErrorMsg("이미 출고 완료된 주문입니다.");
@@ -150,17 +157,22 @@ const Outbound: React.FC = () => {
   const loadValexOrders = async () => {
     try {
       const q = query(
-        collection(db, "orders"),
+        collectionGroup(db, "shipments"),
         where("deliveryType", "==", "VALEX"),
         where("status", "==", "READY")
       );
 
       const snapshot = await getDocs(q);
 
-      const valexOrders = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const valexOrders = snapshot.docs.map(docSnap => {
+        const data: any = docSnap.data();
+        const orderRef = docSnap.ref.parent.parent;
+        const orderId = orderRef ? orderRef.id : "";
+        return {
+          id: orderId,
+          ...data
+        };
+      });
 
       setPendingOrders(valexOrders);
     } catch (err) {
@@ -171,17 +183,22 @@ const Outbound: React.FC = () => {
   const loadPickupOrders = async () => {
     try {
       const q = query(
-        collection(db, "orders"),
+        collectionGroup(db, "shipments"),
         where("deliveryType", "==", "PICKUP"),
         where("status", "==", "READY")
       );
 
       const snapshot = await getDocs(q);
 
-      const pickupOrders = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const pickupOrders = snapshot.docs.map(docSnap => {
+        const data: any = docSnap.data();
+        const orderRef = docSnap.ref.parent.parent;
+        const orderId = orderRef ? orderRef.id : "";
+        return {
+          id: orderId,
+          ...data
+        };
+      });
 
       setPendingOrders(pickupOrders);
     } catch (err) {

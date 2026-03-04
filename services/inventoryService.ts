@@ -1,5 +1,6 @@
 import {
   collection,
+  collectionGroup,
   getDocs,
   doc,
   getDoc,
@@ -219,7 +220,7 @@ class InventoryService {
 
   async getOrderByTracking(trackingNumber: string) {
     const q = query(
-      collection(db, "orders"),
+      collectionGroup(db, "shipments"),
       where("tracking", "==", trackingNumber)
     );
 
@@ -227,10 +228,16 @@ class InventoryService {
     if (snapshot.empty) return null;
 
     const docSnap = snapshot.docs[0];
+    const data: any = docSnap.data();
+
+    // parent orderId 추출 (orders/{orderId}/shipments/{shipmentId})
+    const orderRef = docSnap.ref.parent.parent;
+    const orderId = orderRef ? orderRef.id : "";
 
     return {
-      orderId: docSnap.id,
-      ...docSnap.data()
+      orderId,
+      shipmentId: docSnap.id,
+      ...data
     };
   }
 
