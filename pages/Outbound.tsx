@@ -23,9 +23,11 @@ const Outbound: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [memo, setMemo] = useState('');
 
   const [deliveryMode, setDeliveryMode] = useState<"NORMAL" | "VALEX" | "PICKUP">("NORMAL");
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
+  const [selectedPickupOrders, setSelectedPickupOrders] = useState<string[]>([]);
   const [orderSearch, setOrderSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
@@ -102,10 +104,15 @@ const Outbound: React.FC = () => {
 
     if (!tracking.trim()) return;
 
+    const deliveryTypeFilter =
+      deliveryMode === "NORMAL"
+        ? "POST"
+        : deliveryMode; // "VALEX" or "PICKUP"
+
     const q = query(
       collectionGroup(db, "shipments"),
       where("tracking", "==", tracking.trim()),
-      where("deliveryType", "==", "POST"),
+      where("deliveryType", "==", deliveryTypeFilter),
       where("status", "==", "READY")
     );
 
@@ -148,7 +155,8 @@ const Outbound: React.FC = () => {
           sku: resolvedSku,
           name: item.name || resolvedSku,
           requiredQty: item.qty,
-          scannedQty: 0
+          scannedQty: 0,
+          sourceOrderId: item.sourceOrderId || orderData.id
         };
       })
     );
@@ -164,17 +172,23 @@ const Outbound: React.FC = () => {
 
       const snapshot = await getDocs(q);
 
-      const valexOrders = snapshot.docs.map(docSnap => {
+      const valexMap = new Map<string, any>();
+
+      snapshot.docs.forEach(docSnap => {
         const data: any = docSnap.data();
         const orderRef = docSnap.ref.parent.parent;
-        const orderId = orderRef ? orderRef.id : "";
-        return {
-          id: orderId,
-          ...data
-        };
+        const orderId = orderRef ? orderRef.id : null;
+        if (!orderId) return;
+
+        if (!valexMap.has(orderId)) {
+          valexMap.set(orderId, {
+            id: orderId,
+            ...data
+          });
+        }
       });
 
-      setPendingOrders(valexOrders);
+      setPendingOrders(Array.from(valexMap.values()));
     } catch (err) {
       console.error("발렉스 주문 로딩 실패:", err);
     }
@@ -190,17 +204,41 @@ const Outbound: React.FC = () => {
 
       const snapshot = await getDocs(q);
 
-      const pickupOrders = snapshot.docs.map(docSnap => {
-        const data: any = docSnap.data();
-        const orderRef = docSnap.ref.parent.parent;
-        const orderId = orderRef ? orderRef.id : "";
-        return {
-          id: orderId,
-          ...data
-        };
+      const pickupOrders = await Promise.all(
+        snapshot.docs.map(async (docSnap) => {
+          const data: any = docSnap.data();
+          const orderRef = docSnap.ref.parent.parent;
+
+          if (!orderRef) return null;
+
+          const orderDoc = await getDoc(orderRef);
+
+          let orderData: any = {};
+
+          if (orderDoc.exists()) {
+            orderData = orderDoc.data();
+
+            // MERGED 주문은 리스트에서 제외
+            if (orderData.status === "MERGED") return null;
+          }
+
+          return {
+            id: orderRef.id,
+            ...data,
+            ...orderData
+          };
+        })
+      );
+
+      const uniqueMap = new Map<string, any>();
+
+      pickupOrders.filter(Boolean).forEach((order: any) => {
+        if (!uniqueMap.has(order.id)) {
+          uniqueMap.set(order.id, order);
+        }
       });
 
-      setPendingOrders(pickupOrders);
+      setPendingOrders(Array.from(uniqueMap.values()));
     } catch (err) {
       console.error("방문수령 주문 로딩 실패:", err);
     }
@@ -212,22 +250,25 @@ const Outbound: React.FC = () => {
   };
 
   const handleProductScan = (sku: string) => {
-    const idx = itemsState.findIndex(i => i.sku === sku);
+    // Find the first item with this SKU that still needs to be scanned
+    const idx = itemsState.findIndex(i => i.sku === sku && i.scannedQty < i.requiredQty);
     if (idx !== -1) {
       const newItems = [...itemsState];
-      newItems[idx].scannedQty += 1;
-      setItemsState(newItems);
-      // Play success sound (conceptually)
+      if (newItems[idx].scannedQty < newItems[idx].requiredQty) {
+        newItems[idx].scannedQty += 1;
+        setItemsState(newItems);
+        // Play success sound (conceptually)
+      }
     } else {
-      // Handle wrong item scan
-      setErrorMsg(`SKU ${sku} 는 이 주문에 포함되지 않은 상품입니다.`);
+      // Handle wrong item scan or all already scanned
+      setErrorMsg(`SKU ${sku} 는 주문에 없거나 이미 모든 수량을 스캔했습니다.`);
       setTimeout(() => setErrorMsg(null), 3000);
     }
   };
 
-  const updateQuantity = (sku: string, delta: number) => {
+  const updateQuantity = (sku: string, sourceOrderId: string, delta: number) => {
     setItemsState(prev => prev.map(item => {
-      if (item.sku === sku) {
+      if (item.sku === sku && item.sourceOrderId === sourceOrderId) {
         const newQty = Math.max(0, item.scannedQty + delta);
         return { ...item, scannedQty: newQty };
       }
@@ -235,9 +276,9 @@ const Outbound: React.FC = () => {
     }));
   };
 
-  const setManualQuantity = (sku: string, qty: number) => {
+  const setManualQuantity = (sku: string, sourceOrderId: string, qty: number) => {
     setItemsState(prev => prev.map(item => {
-      if (item.sku === sku) {
+      if (item.sku === sku && item.sourceOrderId === sourceOrderId) {
         return { ...item, scannedQty: Math.max(0, qty) };
       }
       return item;
@@ -263,8 +304,13 @@ const Outbound: React.FC = () => {
     if (!activeOrder || !isOrderComplete) return;
 
     const success = await inventoryService.completeOrder(
-      activeOrder.id,   // 👈 여기 바꿔라
-      itemsState.map(i => ({ sku: i.sku, qty: i.scannedQty }))
+      activeOrder.id,
+      itemsState.map(i => ({ 
+        sku: i.sku, 
+        qty: i.scannedQty,
+        name: i.name  // 🔥 제품명 함께 전달
+      })),
+      memo
     );
 
     if (success) {
@@ -272,6 +318,7 @@ const Outbound: React.FC = () => {
       setActiveOrder(null);
       setItemsState([]);
       setTrackingInput(""); // 🔥 출고 완료 후 운송장 입력값 초기화
+      setMemo("");
 
       // 🔥 배송 모드에 따라 리스트 새로고침
       if (deliveryMode === "VALEX") {
@@ -425,6 +472,75 @@ const Outbound: React.FC = () => {
               />
             </div>
 
+            {/* 동일 고객 자동 선택 버튼 */}
+            {deliveryMode === "PICKUP" && pendingOrders.length > 1 && (
+              <div className="mb-2 flex justify-end">
+                <button
+                  onClick={() => {
+                    if (selectedPickupOrders.length === 0) {
+                      alert("기준 주문을 하나 먼저 선택하세요.");
+                      return;
+                    }
+
+                    const baseOrder = pendingOrders.find(o => o.id === selectedPickupOrders[0]);
+                    if (!baseOrder) return;
+
+                    const baseName = baseOrder.name || baseOrder.receiver;
+
+                    const sameCustomerOrders = pendingOrders
+                      .filter(o => (o.name || o.receiver) === baseName)
+                      .map(o => o.id);
+
+                    setSelectedPickupOrders(sameCustomerOrders);
+                  }}
+                  className="px-3 py-1 bg-slate-200 text-slate-700 rounded-lg text-xs hover:bg-slate-300"
+                >
+                  동일 고객 주문 자동 선택
+                </button>
+              </div>
+            )}
+            {/* 병합 버튼: PICKUP 모드에서 2개 이상 선택 시 노출 */}
+            {deliveryMode === "PICKUP" && selectedPickupOrders.length >= 2 && (
+              <div className="mb-4 flex justify-end">
+                <button
+                  onClick={async () => {
+                    const confirmMerge = window.confirm(
+                      `${selectedPickupOrders.length}개 주문을 병합하시겠습니까?`
+                    );
+                    if (!confirmMerge) return;
+
+                    // 동일 고객인지 확인
+                    const selectedOrders = pendingOrders.filter(o =>
+                      selectedPickupOrders.includes(o.id)
+                    );
+
+                    const names = selectedOrders.map(o => o.name || o.receiver);
+                    const uniqueNames = [...new Set(names)];
+
+                    if (uniqueNames.length > 1) {
+                      alert("다른 고객의 주문은 병합할 수 없습니다.");
+                      return;
+                    }
+
+                    const success = await inventoryService.mergePickupOrders(
+                      selectedPickupOrders
+                    );
+
+                    if (success) {
+                      alert("주문 병합 완료");
+                      setSelectedPickupOrders([]);
+                      loadPickupOrders();
+                    } else {
+                      alert("병합 실패");
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm font-medium"
+                >
+                  선택 주문 병합 ({selectedPickupOrders.length})
+                </button>
+              </div>
+            )}
+
             {filteredOrders.length === 0 && (
               <div className="text-slate-500 text-sm">
                 출고 대기 주문이 없습니다.
@@ -434,36 +550,100 @@ const Outbound: React.FC = () => {
             {paginatedOrders.map((order: any) => (
               <div
                 key={order.id}
-                onClick={() => {
-                  setActiveOrder(order);
-                  setItemsState(
-                    order.items.map((item: any) => {
-                      const resolvedSku =
-                        item.sku ||
-                        item.productSku ||
-                        item.id ||
-                        item.code ||
-                        "";
-
-                      return {
-                        sku: resolvedSku,
-                        name: item.name || resolvedSku,
-                        requiredQty: item.qty,
-                        scannedQty: 0
-                      };
-                    })
-                  );
-                }}
-                className="p-4 border rounded-lg cursor-pointer hover:bg-amber-50 transition"
+                className="p-4 border rounded-lg hover:bg-amber-50 transition flex items-start gap-3 justify-between"
               >
-                <div className="font-semibold text-slate-800">
-                  {order.name ?? order.receiver ?? "고객"}
-                </div>
-                <div className="text-sm text-slate-500">
-                  주문번호: {order.order_no}
-                </div>
-                <div className="text-sm font-mono text-slate-700">
-                  {order.total_price?.toLocaleString()}원
+                {deliveryMode === "PICKUP" && (
+                  <input
+                    type="checkbox"
+                    checked={selectedPickupOrders.includes(order.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedPickupOrders(prev => [...prev, order.id]);
+                      } else {
+                        setSelectedPickupOrders(prev =>
+                          prev.filter(id => id !== order.id)
+                        );
+                      }
+                    }}
+                    className="mt-1"
+                  />
+                )}
+
+                <div
+                  className="flex-1 cursor-pointer"
+                  onClick={() => {
+                    setActiveOrder(order);
+                    setItemsState(
+                      order.items.map((item: any) => {
+                        const resolvedSku =
+                          item.sku ||
+                          item.productSku ||
+                          item.id ||
+                          item.code ||
+                          "";
+
+                        return {
+                          sku: resolvedSku,
+                          name: item.name || resolvedSku,
+                          requiredQty: item.qty,
+                          scannedQty: 0,
+                          sourceOrderId: item.sourceOrderId || order.id
+                        };
+                      })
+                    );
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="font-semibold text-slate-800">
+                      {order.name ?? order.receiver ?? "고객"}
+                    </div>
+
+                    {deliveryMode === "PICKUP" && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+
+                          const baseName = order.name || order.receiver;
+
+                          const sameCustomerOrders = pendingOrders
+                            .filter(o => (o.name || o.receiver) === baseName)
+                            .map(o => o.id);
+
+                          if (sameCustomerOrders.length < 2) {
+                            alert("병합할 동일 고객 주문이 없습니다.");
+                            return;
+                          }
+
+                          const confirmMerge = window.confirm(
+                            `${baseName} 고객 주문 ${sameCustomerOrders.length}건을 병합하시겠습니까?`
+                          );
+
+                          if (!confirmMerge) return;
+
+                          const success = await inventoryService.mergePickupOrders(
+                            sameCustomerOrders
+                          );
+
+                          if (success) {
+                            alert("주문 병합 완료");
+                            setSelectedPickupOrders([]);
+                            loadPickupOrders();
+                          } else {
+                            alert("병합 실패");
+                          }
+                        }}
+                        className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded"
+                      >
+                        같은 고객 병합
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-sm text-slate-500">
+                    주문번호: {order.order_no}
+                  </div>
+                  <div className="text-sm font-mono text-slate-700">
+                    {order.total_price?.toLocaleString()}원
+                  </div>
                 </div>
               </div>
             ))}
@@ -587,12 +767,49 @@ const Outbound: React.FC = () => {
               </div>
             </div>
 
-            <button 
-              onClick={() => setActiveOrder(null)} 
-              className="text-slate-400 hover:text-red-500 text-sm font-medium underline px-4"
-            >
-              Cancel
-            </button>
+            <div className="flex items-center gap-3">
+              {deliveryMode === "PICKUP" && (
+                ((activeOrder as any)?.mergedOrders?.length > 0 ||
+                  itemsState.some(i => i.sourceOrderId && i.sourceOrderId !== activeOrder.id))
+              ) && (
+                <button
+                  onClick={async () => {
+                    const confirmUnmerge = window.confirm("병합을 취소하시겠습니까?");
+                    if (!confirmUnmerge) return;
+
+                    try {
+                      if (typeof (inventoryService as any).unmergePickupOrders !== "function") {
+                        alert("병합 취소 기능이 아직 서버에 구현되지 않았습니다.");
+                        return;
+                      }
+
+                      const success = await (inventoryService as any).unmergePickupOrders(activeOrder.id);
+
+                      if (success) {
+                        alert("병합이 취소되었습니다.");
+                        setActiveOrder(null);
+                        loadPickupOrders();
+                      } else {
+                        alert("병합 취소 실패");
+                      }
+                    } catch (err) {
+                      console.error(err);
+                      alert("병합 취소 중 오류 발생");
+                    }
+                  }}
+                  className="text-xs px-3 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200"
+                >
+                  병합 취소
+                </button>
+              )}
+
+              <button 
+                onClick={() => setActiveOrder(null)} 
+                className="text-slate-400 hover:text-red-500 text-sm font-medium underline px-4"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -609,79 +826,96 @@ const Outbound: React.FC = () => {
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {itemsState.map((item) => {
-                const isComplete = item.scannedQty === item.requiredQty;
-                const isOver = item.scannedQty > item.requiredQty;
-                
-                let rowClass = "border border-slate-200 bg-white";
-                if (isComplete) rowClass = "border-green-200 bg-green-50/50";
-                if (isOver) rowClass = "border-red-200 bg-red-50";
+              {itemsState
+                .sort((a: any, b: any) => {
+                  const oa = (a as any).sourceOrderId || "";
+                  const ob = (b as any).sourceOrderId || "";
+                  return oa.localeCompare(ob);
+                })
+                .map((item, idx, arr) => {
+                  const isComplete = item.scannedQty === item.requiredQty;
+                  const isOver = item.scannedQty > item.requiredQty;
 
-                return (
-                  <div key={item.sku} className={`p-4 rounded-lg flex items-center justify-between transition-all ${rowClass}`}>
-                    <div className="flex items-center gap-4 flex-1">
-                      <div className={`w-2 h-12 rounded-full ${isComplete ? 'bg-green-500' : isOver ? 'bg-red-500' : 'bg-slate-300'}`}></div>
+                  let rowClass = "border border-slate-200 bg-white";
+                  if (isComplete) rowClass = "border-green-200 bg-green-50/50";
+                  if (isOver) rowClass = "border-red-200 bg-red-50";
 
-                      {/* Product Image */}
-                      <div className="w-14 h-14 rounded-md overflow-hidden bg-slate-100 flex items-center justify-center border">
-                        {(item as any).image ? (
-                          <img
-                            src={(item as any).image}
-                            alt={item.name}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <span className="text-[10px] text-slate-400">NO IMG</span>
-                        )}
-                      </div>
+                  const currentOrder = (item as any).sourceOrderId;
+                  const prevOrder = idx > 0 ? (arr[idx - 1] as any).sourceOrderId : null;
+                  const showHeader = currentOrder && currentOrder !== prevOrder;
 
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-slate-800 text-lg">{item.name}</h4>
-                          {isComplete && <CheckCircle2 size={18} className="text-green-600" />}
-                          {isOver && <AlertCircle size={18} className="text-red-600" />}
+                  return (
+                    <React.Fragment key={`${item.sku}-${item.sourceOrderId}-${idx}`}>
+                      {showHeader && (
+                        <div className="px-3 pt-4 pb-1 text-xs font-mono text-slate-400">
+                          ─ 주문번호 {currentOrder}
                         </div>
-                        <p className="text-sm font-mono text-slate-500">{item.sku}</p>
-                      </div>
-                    </div>
+                      )}
 
-                    <div className="flex items-center gap-6">
-                      <div className="text-right">
-                        <span className="text-xs text-slate-400 block uppercase font-bold tracking-wider">Required</span>
-                        <span className="text-xl font-bold text-slate-700">{item.requiredQty}</span>
-                      </div>
+                      <div className={`p-4 rounded-lg flex items-center justify-between transition-all ${rowClass}`}>
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className={`w-2 h-12 rounded-full ${isComplete ? 'bg-green-500' : isOver ? 'bg-red-500' : 'bg-slate-300'}`}></div>
 
-                      <div className="h-10 w-px bg-slate-200"></div>
+                          <div className="w-14 h-14 rounded-md overflow-hidden bg-slate-100 flex items-center justify-center border">
+                            {(item as any).image ? (
+                              <img
+                                src={(item as any).image}
+                                alt={item.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-[10px] text-slate-400">NO IMG</span>
+                            )}
+                          </div>
 
-                      <div className="flex items-center gap-3">
-                        <button 
-                          onClick={() => updateQuantity(item.sku, -1)}
-                          className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
-                        >
-                          <Minus size={16} />
-                        </button>
-                        
-                        <div className="flex flex-col items-center w-16">
-                           <input 
-                              type="number" 
-                              value={item.scannedQty}
-                              onChange={(e) => setManualQuantity(item.sku, parseInt(e.target.value) || 0)}
-                              className={`w-16 text-center text-2xl font-bold bg-transparent outline-none ${isOver ? 'text-red-600' : isComplete ? 'text-green-600' : 'text-amber-600'}`}
-                           />
-                           <span className="text-[10px] text-slate-400">SCANNED</span>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-bold text-slate-800 text-lg">{item.name}</h4>
+                              {isComplete && <CheckCircle2 size={18} className="text-green-600" />}
+                              {isOver && <AlertCircle size={18} className="text-red-600" />}
+                            </div>
+                            <p className="text-sm font-mono text-slate-500">{item.sku}</p>
+                          </div>
                         </div>
 
-                        <button 
-                          onClick={() => updateQuantity(item.sku, 1)}
-                          className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
-                        >
-                          <Plus size={16} />
-                        </button>
+                        <div className="flex items-center gap-6">
+                          <div className="text-right">
+                            <span className="text-xs text-slate-400 block uppercase font-bold tracking-wider">Required</span>
+                            <span className="text-xl font-bold text-slate-700">{item.requiredQty}</span>
+                          </div>
+
+                          <div className="h-10 w-px bg-slate-200"></div>
+
+                          <div className="flex items-center gap-3">
+                            <button 
+                              onClick={() => updateQuantity(item.sku, item.sourceOrderId, -1)}
+                              className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
+                            >
+                              <Minus size={16} />
+                            </button>
+
+                            <div className="flex flex-col items-center w-16">
+                              <input 
+                                type="number" 
+                                value={item.scannedQty}
+                                onChange={(e) => setManualQuantity(item.sku, item.sourceOrderId, parseInt(e.target.value) || 0)}
+                                className={`w-16 text-center text-2xl font-bold bg-transparent outline-none ${isOver ? 'text-red-600' : isComplete ? 'text-green-600' : 'text-amber-600'}`}
+                              />
+                              <span className="text-[10px] text-slate-400">SCANNED</span>
+                            </div>
+
+                            <button 
+                              onClick={() => updateQuantity(item.sku, item.sourceOrderId, 1)}
+                              className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
+                            >
+                              <Plus size={16} />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
+                    </React.Fragment>
+                  );
+                })}
             </div>
             
             {/* Hidden Input for Barcode Scanner Listener */}
@@ -718,7 +952,15 @@ const Outbound: React.FC = () => {
                         {errorMsg}
                     </div>
                   )}
-                  
+                  <div className="mb-4">
+                    <textarea
+                      value={memo}
+                      onChange={(e) => setMemo(e.target.value)}
+                      placeholder="출고 메모 (선택)"
+                      className="w-full p-3 rounded-lg bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm resize-none"
+                      rows={3}
+                    />
+                  </div>
                   <button
                     onClick={handleFinalize}
                     disabled={!isOrderComplete}

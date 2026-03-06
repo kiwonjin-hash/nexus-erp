@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   PackagePlus, 
@@ -17,6 +17,15 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) => {
   
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const [operatorName, setOperatorName] = useState('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('operatorName');
+    if (saved) setOperatorName(saved);
+  }, []);
+
   const navItems = [
     { id: 'DASHBOARD' as PageView, label: '대시보드', icon: LayoutDashboard },
     { id: 'INBOUND' as PageView, label: '입고 관리', icon: PackagePlus },
@@ -26,9 +35,20 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
   ];
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans relative">
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/40 z-10 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       {/* Sidebar */}
-      <aside className="w-64 bg-[#0e1a33] text-white flex flex-col shadow-2xl z-10">
+      <aside className={`
+        fixed md:static top-0 left-0 h-full md:h-auto
+        w-64 bg-[#0e1a33] text-white flex flex-col shadow-2xl z-20
+        transform transition-transform duration-300
+        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
         <div className="p-6 border-b border-slate-700 flex items-center gap-3">
           <div className="w-10 h-10 rounded-[0px] overflow-hidden flex items-center justify-center">
             <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
@@ -42,7 +62,10 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
             return (
               <button
                 key={item.id}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => {
+                  onNavigate(item.id);
+                  setIsSidebarOpen(false);
+                }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200
                   ${isActive 
                     ? 'bg-[#0e1a33] text-white' 
@@ -72,16 +95,33 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
       <main className="flex-1 flex flex-col min-h-0 relative">
         {/* Header (Optional sticky header for title/user info) */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm shrink-0">
-          <h1 className="text-lg font-semibold text-slate-800">
-            {navItems.find(n => n.id === currentPage)?.label}
-          </h1>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center">
+            <button
+              className="md:hidden mr-4"
+              onClick={() => setIsSidebarOpen(true)}
+            >
+              <div className="w-5 h-0.5 bg-slate-800 mb-1" />
+              <div className="w-5 h-0.5 bg-slate-800 mb-1" />
+              <div className="w-5 h-0.5 bg-slate-800" />
+            </button>
+            <h1 className="text-lg font-semibold text-slate-800">
+              {navItems.find(n => n.id === currentPage)?.label}
+            </h1>
+          </div>
+          <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs">
-              AD
+              {operatorName ? operatorName.charAt(0).toUpperCase() : 'AD'}
             </div>
-            <div className="text-sm text-slate-600">
-              <span className="font-medium text-slate-900">Admin User</span>
-            </div>
+            <input
+              value={operatorName}
+              onChange={(e) => {
+                const value = e.target.value;
+                setOperatorName(value);
+                localStorage.setItem('operatorName', value);
+              }}
+              placeholder="작업자 이름 입력"
+              className="text-sm px-3 py-1 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
           </div>
         </header>
 

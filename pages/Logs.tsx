@@ -18,12 +18,26 @@ type UnifiedLog = {
   orderId?: string;
   trackingNumber?: string;
   customerName?: string;
+  memo?: string;
+  needsReview?: boolean;
+  unmatchedItems?: {
+    sku?: string;
+    name?: string;
+    qty: number;
+    reason: string;
+  }[];
   date: string;
 };
 
 const Logs: React.FC = () => {
   const [logs, setLogs] = useState<UnifiedLog[]>([]);
   const [selectedLog, setSelectedLog] = useState<UnifiedLog | null>(null);
+  const [linkingIndex, setLinkingIndex] = useState<number | null>(null);
+  const [targetSku, setTargetSku] = useState("");
+  const [isLinking, setIsLinking] = useState(false);
+  const [skuSuggestions, setSkuSuggestions] = useState<
+    { sku: string; name: string; stock: number }[]
+  >([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"orderId" | "tracking" | "sku" | "customer" | "product">("orderId");
   const [page, setPage] = useState(1);
@@ -102,6 +116,17 @@ const Logs: React.FC = () => {
 
   useEffect(() => {
     loadFirstPage();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedLog(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
 
@@ -234,6 +259,9 @@ const Logs: React.FC = () => {
               <th className="px-6 py-3 text-sm font-semibold text-slate-500">
                 제품명
               </th>
+              <th className="px-6 py-3 text-sm font-semibold text-slate-500">
+                주문자
+              </th>
               <th className="px-6 py-3 text-sm font-semibold text-slate-500 text-right">
                 수량
               </th>
@@ -293,9 +321,30 @@ const Logs: React.FC = () => {
                 <td className="px-6 py-4 text-slate-900 font-medium">
                   {log.items.map((item, idx) => (
                     <div key={idx} className="leading-6">
-                      <span className="text-slate-900">{item.name}</span>
+                      <span className="text-slate-900">
+                        {item.name || item.sku || "제품명 없음"}
+                      </span>
                     </div>
                   ))}
+                  {log.memo && (
+                    <div className="mt-1 text-xs text-amber-600 font-medium">
+                      📝 {log.memo}
+                    </div>
+                  )}
+                  {(log.needsReview || (log.unmatchedItems && log.unmatchedItems.length > 0)) && (
+                    <div className="mt-1 text-xs text-red-600 font-bold space-y-1">
+                      <div>🔴 SKU 미매칭 (검토 필요)</div>
+                      {log.unmatchedItems?.map((u, i) => (
+                        <div key={i} className="text-xs text-red-500">
+                          · {u.name || "제품명 없음"} (-{u.qty})
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </td>
+
+                <td className="px-6 py-4 text-slate-700 font-medium">
+                  {log.customerName || "-"}
                 </td>
 
                 <td className="px-6 py-4 text-right font-bold text-red-600">
@@ -361,8 +410,14 @@ const Logs: React.FC = () => {
       )}
 
       {selectedLog && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white w-[600px] rounded-xl shadow-xl p-8 relative">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+          onClick={() => setSelectedLog(null)}
+        >
+          <div
+            className="bg-white w-[600px] rounded-xl shadow-xl p-8 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               onClick={() => setSelectedLog(null)}
               className="absolute top-4 right-4 text-slate-400 hover:text-red-500"
@@ -394,7 +449,9 @@ const Logs: React.FC = () => {
                     <div key={idx} className="border rounded px-3 py-2 bg-slate-50">
                       <div>
                         <b>제품명:</b>{" "}
-                        <span className="text-slate-900">{item.name}</span>
+                        <span className="text-slate-900">
+                          {item.name || item.sku || "제품명 없음"}
+                        </span>
                       </div>
                       <div><b>SKU:</b> {item.sku}</div>
                       <div><b>수량:</b> -{item.quantity}</div>
@@ -406,6 +463,141 @@ const Logs: React.FC = () => {
               <div><b>주문번호:</b> {selectedLog.orderId || "-"}</div>
               <div><b>송장번호:</b> {selectedLog.trackingNumber || "-"}</div>
               <div><b>작업자:</b> {selectedLog.operator || "-"}</div>
+              {selectedLog.memo && (
+                <div>
+                  <b>메모:</b> {selectedLog.memo}
+                </div>
+              )}
+              {selectedLog.needsReview && selectedLog.unmatchedItems && selectedLog.unmatchedItems.length > 0 && (
+                <div>
+                  <b className="text-red-600">SKU 미매칭 항목:</b>
+                  <div className="mt-2 space-y-1">
+                    {selectedLog.unmatchedItems.map((item, idx) => (
+                      <div key={idx} className="border border-red-300 rounded px-3 py-3 bg-red-50 text-sm space-y-2">
+                        {item.name && (
+                          <div>
+                            <b>제품명:</b> <span className="text-slate-900">{item.name}</span>
+                          </div>
+                        )}
+                        <div>
+                          <b>SKU:</b> {item.sku || "(없음)"}
+                        </div>
+                        <div><b>수량:</b> {item.qty}</div>
+                        <div><b>사유:</b> {item.reason}</div>
+
+                        {linkingIndex === idx ? (
+                          <div className="flex gap-2 mt-2 relative">
+                            <input
+                              type="text"
+                              placeholder="연결할 SKU 입력"
+                              value={targetSku}
+                              autoFocus
+                              onChange={async (e) => {
+                                const value = e.target.value;
+                                setTargetSku(value);
+
+                                if (value.trim().length >= 1) {
+                                  const results = await inventoryService.searchInventory(value);
+                                  setSkuSuggestions(results);
+                                } else {
+                                  setSkuSuggestions([]);
+                                }
+                              }}
+                              onKeyDown={async (e) => {
+                                if (e.key === "Enter") {
+                                  if (!targetSku.trim()) return;
+
+                                  setIsLinking(true);
+                                  const success = await inventoryService.linkUnmatchedItem(
+                                    selectedLog.id,
+                                    idx,
+                                    targetSku
+                                  );
+                                  setIsLinking(false);
+
+                                  if (success) {
+                                    alert("SKU 연결 완료");
+                                    setLinkingIndex(null);
+                                    setTargetSku("");
+                                    setSelectedLog(null);
+                                    loadFirstPage();
+                                  } else {
+                                    alert("SKU 연결 실패");
+                                  }
+                                }
+                              }}
+                              className="flex-1 px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                            {skuSuggestions.length > 0 && (
+                              <div className="absolute bg-white border border-slate-200 rounded shadow-md mt-1 w-full max-h-40 overflow-auto z-50">
+                                {skuSuggestions.map((s, i) => (
+                                  <div
+                                    key={i}
+                                    onClick={() => {
+                                      setTargetSku(s.sku);
+                                      setSkuSuggestions([]);
+                                    }}
+                                    className="px-3 py-2 text-xs hover:bg-slate-100 cursor-pointer"
+                                  >
+                                    <div className="font-bold">{s.sku}</div>
+                                    <div className="text-slate-500">{s.name} (재고: {s.stock})</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <button
+                              disabled={isLinking}
+                              onClick={async () => {
+                                if (!targetSku.trim()) return;
+
+                                setIsLinking(true);
+                                const success = await inventoryService.linkUnmatchedItem(
+                                  selectedLog.id,
+                                  idx,
+                                  targetSku
+                                );
+                                setIsLinking(false);
+
+                                if (success) {
+                                  alert("SKU 연결 완료");
+                                  setLinkingIndex(null);
+                                  setTargetSku("");
+                                  setSelectedLog(null);
+                                  loadFirstPage();
+                                } else {
+                                  alert("SKU 연결 실패");
+                                }
+                              }}
+                              className="px-3 py-1 bg-amber-500 text-white rounded text-xs"
+                            >
+                              연결
+                            </button>
+                            <button
+                              onClick={() => {
+                                setLinkingIndex(null);
+                                setTargetSku("");
+                              }}
+                              className="px-3 py-1 bg-slate-300 rounded text-xs"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setLinkingIndex(idx);
+                              setTargetSku("");
+                            }}
+                            className="mt-2 px-3 py-1 bg-red-600 text-white rounded text-xs"
+                          >
+                            기존 상품에 연결
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
