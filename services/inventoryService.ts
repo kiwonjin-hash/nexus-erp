@@ -190,21 +190,26 @@ class InventoryService {
         collection(db, "orders", orderId, "shipments")
       );
 
-      // 🔥 deliveryType 결정 (order → shipment → fallback 순서)
+      // 첫 번째 shipment 데이터 추출
+      const firstShipment = !shipmentsSnap.empty 
+        ? (shipmentsSnap.docs[0].data() as any) 
+        : null;
+
+      // 🔥 trackingNumber 결정 (order → shipment 순서)
       const trackingNumber =
         orderData.tracking ||
+        orderData.trackingNumber ||
+        firstShipment?.trackingNumber ||
+        firstShipment?.tracking ||
         "";
 
-      // 먼저 order 문서 확인
+      // 🔥 deliveryType 결정 (order → shipment → fallback 순서)
       let deliveryType = orderData.deliveryType;
 
-      // order에 없으면 shipment에서 확인
-      if (!deliveryType && !shipmentsSnap.empty) {
-        const shipmentData: any = shipmentsSnap.docs[0].data() || {};
-        deliveryType = shipmentData.deliveryType || shipmentData.type;
+      if (!deliveryType && firstShipment) {
+        deliveryType = firstShipment.deliveryType || firstShipment.type;
       }
 
-      // 그래도 없으면 fallback
       if (!deliveryType) {
         deliveryType = trackingNumber ? "POST" : "PICKUP";
       }
@@ -240,14 +245,13 @@ class InventoryService {
         "";
 
       // order 문서에 이름이 없으면 shipment에서 다시 확인
-      if (!resolvedCustomerName && !shipmentsSnap.empty) {
-        const shipmentData: any = shipmentsSnap.docs[0].data() || {};
+      if (!resolvedCustomerName && firstShipment) {
         resolvedCustomerName =
-          shipmentData.name ||
-          shipmentData.customerName ||
-          shipmentData.buyerName ||
-          shipmentData.receiverName ||
-          shipmentData.receiver ||
+          firstShipment.name ||
+          firstShipment.customerName ||
+          firstShipment.buyerName ||
+          firstShipment.receiverName ||
+          firstShipment.receiver ||
           "";
       }
 
@@ -318,10 +322,6 @@ class InventoryService {
       });
 
       // 🔹 해당 주문의 모든 shipment도 완료 처리 (아웃바운드 목록에서 사라지도록)
-      // const shipmentsSnap = await getDocs(
-      //   collection(db, "orders", orderId, "shipments")
-      // );
-
       const batch = writeBatch(db);
 
       shipmentsSnap.docs.forEach((shipmentDoc) => {
@@ -482,13 +482,14 @@ class InventoryService {
     limitCount: number = 50,
     lastDoc?: QueryDocumentSnapshot<DocumentData>
   ) {
+    const normalizedTracking = (trackingNumber || "").trim();
     let q;
 
     if (lastDoc) {
       q = query(
         collection(db, "logs"),
         where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("trackingNumber", "==", trackingNumber),
+        where("trackingNumber", "==", normalizedTracking),
         orderBy("createdAt", "desc"),
         startAfter(lastDoc),
         limit(limitCount)
@@ -497,7 +498,7 @@ class InventoryService {
       q = query(
         collection(db, "logs"),
         where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("trackingNumber", "==", trackingNumber),
+        where("trackingNumber", "==", normalizedTracking),
         orderBy("createdAt", "desc"),
         limit(limitCount)
       );

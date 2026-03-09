@@ -39,7 +39,7 @@ const Logs: React.FC = () => {
     { sku: string; name: string; stock: number }[]
   >([]);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"orderId" | "tracking" | "sku" | "customer" | "product">("orderId");
+  const [filter, setFilter] = useState<"orderId" | "tracking" | "sku" | "customer" | "product">("tracking");
   const [page, setPage] = useState(1);
   const [pageCursors, setPageCursors] = useState<any[]>([null]);
   const [hasMore, setHasMore] = useState(true);
@@ -95,20 +95,22 @@ const Logs: React.FC = () => {
 
   const fetchSearchPage = async (
     pageNumber: number,
-    cursor?: any
+    cursor?: any,
+    keyword?: string
   ) => {
+    const query = keyword ?? search;
     let data: any;
 
     if (filter === "orderId") {
-      data = await inventoryService.searchByOrderId(search, pageSize, cursor);
+      data = await inventoryService.searchByOrderId(query, pageSize, cursor);
     } else if (filter === "tracking") {
-      data = await inventoryService.searchByTracking(search, pageSize, cursor);
+      data = await inventoryService.searchByTracking(query, pageSize, cursor);
     } else if (filter === "sku") {
-      data = await inventoryService.searchBySku(search, pageSize, cursor);
+      data = await inventoryService.searchBySku(query, pageSize, cursor);
     } else if (filter === "customer") {
-      data = await inventoryService.searchByCustomer(search, pageSize, cursor);
+      data = await inventoryService.searchByCustomer(query, pageSize, cursor);
     } else {
-      data = await inventoryService.searchByProductName(search, pageSize, cursor);
+      data = await inventoryService.searchByProductName(query, pageSize, cursor);
     }
 
     return data;
@@ -154,6 +156,18 @@ const Logs: React.FC = () => {
       data = await inventoryService.getOutboundLogs(pageSize, cursor);
     }
 
+    if (isSearchMode) {
+      data = data.map((d: any) => {
+        const timestamp = d.createdAt || null;
+        return {
+          ...d,
+          date: timestamp?.seconds
+            ? new Date(timestamp.seconds * 1000).toLocaleString()
+            : ""
+        };
+      });
+    }
+
     setLogs(data);
     setPage(pageNumber);
 
@@ -164,8 +178,8 @@ const Logs: React.FC = () => {
     setHasMore(!!(data as any).lastVisible);
   };
 
-  const handleSearch = async (overrideKeyword?: string) => {
-    const keyword = overrideKeyword ?? search;
+  const handleSearch = async (overrideKeyword?: any) => {
+    const keyword = String(overrideKeyword ?? search ?? "");
 
     if (!keyword.trim()) {
       setIsSearchMode(false);
@@ -175,9 +189,19 @@ const Logs: React.FC = () => {
 
     setIsSearchMode(true);
 
-    const data: any = await fetchSearchPage(1);
+    const data: any = await fetchSearchPage(1, undefined, keyword);
 
-    setLogs(data);
+    const formatted = data.map((d: any) => {
+      const timestamp = d.createdAt || null;
+      return {
+        ...d,
+        date: timestamp?.seconds
+          ? new Date(timestamp.seconds * 1000).toLocaleString()
+          : ""
+      };
+    });
+
+    setLogs(formatted);
     setPage(1);
     setPageCursors([null, (data as any).lastVisible]);
     setHasMore(!!(data as any).lastVisible);
@@ -231,7 +255,7 @@ const Logs: React.FC = () => {
         />
 
         <button
-          onClick={handleSearch}
+          onClick={() => handleSearch()}
           className="px-4 py-2 bg-amber-500 text-white rounded-lg"
         >
           검색
@@ -321,9 +345,20 @@ const Logs: React.FC = () => {
                 <td className="px-6 py-4 text-slate-900 font-medium">
                   {log.items.map((item, idx) => (
                     <div key={idx} className="leading-6">
-                      <span className="text-slate-900">
-                        {item.name || item.sku || "제품명 없음"}
-                      </span>
+                      {item.link ? (
+                        <a
+                          href={item.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline"
+                        >
+                          {item.name || item.sku || "제품명 없음"}
+                        </a>
+                      ) : (
+                        <span className="text-slate-900">
+                          {item.name || item.sku || "제품명 없음"}
+                        </span>
+                      )}
                     </div>
                   ))}
                   {log.memo && (
@@ -449,9 +484,20 @@ const Logs: React.FC = () => {
                     <div key={idx} className="border rounded px-3 py-2 bg-slate-50">
                       <div>
                         <b>제품명:</b>{" "}
-                        <span className="text-slate-900">
-                          {item.name || item.sku || "제품명 없음"}
-                        </span>
+                        {item.link ? (
+                          <a
+                            href={item.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline"
+                          >
+                            {item.name || item.sku || "제품명 없음"}
+                          </a>
+                        ) : (
+                          <span className="text-slate-900">
+                            {item.name || item.sku || "제품명 없음"}
+                          </span>
+                        )}
                       </div>
                       <div><b>SKU:</b> {item.sku}</div>
                       <div><b>수량:</b> -{item.quantity}</div>
