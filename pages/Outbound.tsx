@@ -266,23 +266,27 @@ const Outbound: React.FC = () => {
     }
   };
 
-  const updateQuantity = (sku: string, sourceOrderId: string, delta: number) => {
-    setItemsState(prev => prev.map(item => {
-      if (item.sku === sku && item.sourceOrderId === sourceOrderId) {
-        const newQty = Math.max(0, item.scannedQty + delta);
-        return { ...item, scannedQty: newQty };
-      }
-      return item;
-    }));
+  const updateQuantity = (index: number, delta: number) => {
+    setItemsState(prev =>
+      prev.map((item, i) => {
+        if (i === index) {
+          const newQty = Math.max(0, item.scannedQty + delta);
+          return { ...item, scannedQty: newQty };
+        }
+        return item;
+      })
+    );
   };
 
-  const setManualQuantity = (sku: string, sourceOrderId: string, qty: number) => {
-    setItemsState(prev => prev.map(item => {
-      if (item.sku === sku && item.sourceOrderId === sourceOrderId) {
-        return { ...item, scannedQty: Math.max(0, qty) };
-      }
-      return item;
-    }));
+  const setManualQuantity = (index: number, qty: number) => {
+    setItemsState(prev =>
+      prev.map((item, i) => {
+        if (i === index) {
+          return { ...item, scannedQty: Math.max(0, qty) };
+        }
+        return item;
+      })
+    );
   };
 
   const handleBarcodeSubmit = (e: React.FormEvent) => {
@@ -888,7 +892,7 @@ const Outbound: React.FC = () => {
 
                           <div className="flex items-center gap-3">
                             <button 
-                              onClick={() => updateQuantity(item.sku, item.sourceOrderId, -1)}
+                              onClick={() => updateQuantity(idx, -1)}
                               className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
                             >
                               <Minus size={16} />
@@ -898,14 +902,14 @@ const Outbound: React.FC = () => {
                               <input 
                                 type="number" 
                                 value={item.scannedQty}
-                                onChange={(e) => setManualQuantity(item.sku, item.sourceOrderId, parseInt(e.target.value) || 0)}
+                                onChange={(e) => setManualQuantity(idx, parseInt(e.target.value) || 0)}
                                 className={`w-16 text-center text-2xl font-bold bg-transparent outline-none ${isOver ? 'text-red-600' : isComplete ? 'text-green-600' : 'text-amber-600'}`}
                               />
                               <span className="text-[10px] text-slate-400">SCANNED</span>
                             </div>
 
                             <button 
-                              onClick={() => updateQuantity(item.sku, item.sourceOrderId, 1)}
+                              onClick={() => updateQuantity(idx, 1)}
                               className="w-8 h-8 rounded-full border border-slate-300 flex items-center justify-center hover:bg-slate-100 text-slate-500"
                             >
                               <Plus size={16} />
