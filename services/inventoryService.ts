@@ -283,12 +283,13 @@ class InventoryService {
         unmatchedItems: unmatchedItems,
         createdAt: serverTimestamp(),
         items: await Promise.all(
-          items.map(async (item) => {
+          items.map(async (item, idx) => {
             const normalizedSku = (item.sku || "").trim().toUpperCase();
 
             if (!normalizedSku) {
               return {
-                sku: "",
+                sku: `UNMATCHED_${idx}`,
+                originalSku: "",
                 name: "",
                 quantity: item.qty,
                 link: ""
@@ -300,7 +301,8 @@ class InventoryService {
 
             if (!productSnap.exists()) {
               return {
-                sku: normalizedSku,
+                sku: `UNMATCHED_${idx}`,
+                originalSku: normalizedSku,
                 name: "",
                 quantity: item.qty,
                 link: ""
@@ -777,12 +779,14 @@ class InventoryService {
       const productName = productData.name || "";
       const productLink = productData.link || "";
 
-      // 기존 items 중 SKU가 비어있는 항목 찾아 업데이트
+      // 기존 items 중 SKU가 비어있거나 UNMATCHED_로 시작하는 항목 찾아 업데이트
       let updated = false;
 
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
-        if (!it.sku) {
+        const currentSku = it?.sku || "";
+
+        if (!currentSku || currentSku.startsWith("UNMATCHED_")) {
           items[i] = {
             sku: normalizedSku,
             name: productName,
