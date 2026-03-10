@@ -35,6 +35,7 @@ const Logs: React.FC = () => {
   const [linkingIndex, setLinkingIndex] = useState<number | null>(null);
   const [targetSku, setTargetSku] = useState("");
   const [isLinking, setIsLinking] = useState(false);
+  const [isBulkLinking, setIsBulkLinking] = useState(false);
   const [skuSuggestions, setSkuSuggestions] = useState<
     { sku: string; name: string; stock: number }[]
   >([]);
@@ -205,6 +206,14 @@ const Logs: React.FC = () => {
     setPage(1);
     setPageCursors([null, (data as any).lastVisible]);
     setHasMore(!!(data as any).lastVisible);
+  };
+
+  const resetLinkingUi = () => {
+    setLinkingIndex(null);
+    setTargetSku("");
+    setSkuSuggestions([]);
+    setSelectedLog(null);
+    loadFirstPage();
   };
 
 
@@ -563,10 +572,7 @@ const Logs: React.FC = () => {
 
                                   if (success) {
                                     alert("SKU 연결 완료");
-                                    setLinkingIndex(null);
-                                    setTargetSku("");
-                                    setSelectedLog(null);
-                                    loadFirstPage();
+                                    resetLinkingUi();
                                   } else {
                                     alert("SKU 연결 실패");
                                   }
@@ -592,7 +598,7 @@ const Logs: React.FC = () => {
                               </div>
                             )}
                             <button
-                              disabled={isLinking}
+                              disabled={isLinking || isBulkLinking}
                               onClick={async () => {
                                 if (!targetSku.trim()) return;
 
@@ -606,22 +612,61 @@ const Logs: React.FC = () => {
 
                                 if (success) {
                                   alert("SKU 연결 완료");
-                                  setLinkingIndex(null);
-                                  setTargetSku("");
-                                  setSelectedLog(null);
-                                  loadFirstPage();
+                                  resetLinkingUi();
                                 } else {
                                   alert("SKU 연결 실패");
                                 }
                               }}
-                              className="px-3 py-1 bg-amber-500 text-white rounded text-xs"
+                              className="px-3 py-1 bg-amber-500 text-white rounded text-xs disabled:opacity-50"
                             >
                               연결
+                            </button>
+                            <button
+                              disabled={isLinking || isBulkLinking}
+                              onClick={async () => {
+                                if (!targetSku.trim()) return;
+
+                                const hasMatchName = !!(item.name || "").trim();
+                                const hasOriginalSku = !!(item.sku || "").trim();
+
+                                if (!hasMatchName && !hasOriginalSku) {
+                                  alert("일괄 매칭 기준이 없어 실행할 수 없습니다.");
+                                  return;
+                                }
+
+                                const confirmed = window.confirm(
+                                  `같은 미매칭 항목을 한 번에 연결할까요?\n\n제품명: ${item.name || "(없음)"}\n미매칭 SKU: ${item.sku || "(없음)"}\n연결 대상 SKU: ${targetSku}`
+                                );
+
+                                if (!confirmed) return;
+
+                                setIsBulkLinking(true);
+                                const result = await inventoryService.bulkLinkUnmatchedItems({
+                                  targetSku,
+                                  matchName: item.name || "",
+                                  originalSku: item.sku || "",
+                                  limitCount: 200
+                                });
+                                setIsBulkLinking(false);
+
+                                if (result?.success) {
+                                  alert(
+                                    `일괄 연결 완료\n로그 ${result.updatedLogs}건 / 항목 ${result.matchedEntries}건 / 총 수량 ${result.totalQty}`
+                                  );
+                                  resetLinkingUi();
+                                } else {
+                                  alert("일괄 연결 실패");
+                                }
+                              }}
+                              className="px-3 py-1 bg-blue-600 text-white rounded text-xs disabled:opacity-50"
+                            >
+                              같은 항목 전체 연결
                             </button>
                             <button
                               onClick={() => {
                                 setLinkingIndex(null);
                                 setTargetSku("");
+                                setSkuSuggestions([]);
                               }}
                               className="px-3 py-1 bg-slate-300 rounded text-xs"
                             >
@@ -633,6 +678,7 @@ const Logs: React.FC = () => {
                             onClick={() => {
                               setLinkingIndex(idx);
                               setTargetSku("");
+                              setSkuSuggestions([]);
                             }}
                             className="mt-2 px-3 py-1 bg-red-600 text-white rounded text-xs"
                           >

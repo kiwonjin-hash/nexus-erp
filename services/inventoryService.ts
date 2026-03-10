@@ -25,6 +25,64 @@ import { Product } from "../types";
 
 class InventoryService {
 
+  private normalizeUnmatchedText(value: string) {
+    return (value || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private replaceUnmatchedPlaceholderItem(
+    items: any[],
+    targetQty: number,
+    normalizedSku: string,
+    productName: string,
+    productLink: string
+  ) {
+    for (let i = 0; i < items.length; i++) {
+      const current = items[i] || {};
+      const currentSku = current.sku || "";
+      const currentQty = Number(current.quantity || 0);
+
+      if (
+        (!currentSku || currentSku.startsWith("UNMATCHED_")) &&
+        currentQty === Number(targetQty || 0)
+      ) {
+        items[i] = {
+          sku: normalizedSku,
+          name: productName,
+          quantity: current.quantity ?? targetQty,
+          link: productLink
+        };
+        return true;
+      }
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const current = items[i] || {};
+      const currentSku = current.sku || "";
+
+      if (!currentSku || currentSku.startsWith("UNMATCHED_")) {
+        items[i] = {
+          sku: normalizedSku,
+          name: productName,
+          quantity: current.quantity ?? targetQty,
+          link: productLink
+        };
+        return true;
+      }
+    }
+
+    items.push({
+      sku: normalizedSku,
+      name: productName,
+      quantity: targetQty,
+      link: productLink
+    });
+
+    return true;
+  }
+
   async getProducts(): Promise<Product[]> {
     const snapshot = await getDocs(collection(db, "inventory"));
     return snapshot.docs.map(docSnap => ({
@@ -779,34 +837,13 @@ class InventoryService {
       const productName = productData.name || "";
       const productLink = productData.link || "";
 
-      // 기존 items 중 SKU가 비어있거나 UNMATCHED_로 시작하는 항목 찾아 업데이트
-      let updated = false;
-
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        const currentSku = it?.sku || "";
-
-        if (!currentSku || currentSku.startsWith("UNMATCHED_")) {
-          items[i] = {
-            sku: normalizedSku,
-            name: productName,
-            quantity: it.quantity ?? item.qty,
-            link: productLink
-          };
-          updated = true;
-          break;
-        }
-      }
-
-      // 혹시 비어있는 항목이 없으면 새로 추가
-      if (!updated) {
-        items.push({
-          sku: normalizedSku,
-          name: productName,
-          quantity: item.qty,
-          link: productLink
-        });
-      }
+      this.replaceUnmatchedPlaceholderItem(
+        items,
+        Number(item.qty || 0),
+        normalizedSku,
+        productName,
+        productLink
+      );
 
       // 🔹 unmatchedItems에서 제거
       unmatchedItems.splice(unmatchedIndex, 1);
@@ -822,6 +859,177 @@ class InventoryService {
     } catch (error) {
       console.error("SKU 수동 매칭 실패:", error);
       return false;
+    }
+  }
+
+  // 🔧 SKU 미매칭 항목 일괄 매칭
+  async bulkLinkUnmatchedItems(params: {
+    targetSku: string;
+    matchName?: string;
+    originalSku?: string;
+    limitCount?: number;
+    dryRun?: boolean;
+  }) {
+    try {
+      const normalizedSku = (params.targetSku || "").trim().toUpperCase();
+      const normalizedMatchName = this.normalizeUnmatchedText(
+        params.matchName || ""
+      );
+      const normalizedOriginalSku = (params.originalSku || "")
+        .trim()
+        .toUpperCase();
+      const limitCount = Math.min(Number(params.limitCount || 200), 400);
+      const dryRun = Boolean(params.dryRun);
+
+      if (!normalizedSku) {
+        throw new Error("대상 SKU가 비어 있습니다.");
+      }
+
+      if (!normalizedMatchName && !normalizedOriginalSku) {
+        throw new Error("matchName 또는 originalSku 중 하나는 필요합니다.");
+      }
+
+      const productRef = doc(db, "inventory", normalizedSku);
+      const productSnap = await getDoc(productRef);
+
+      if (!productSnap.exists()) {
+        throw new Error("연결할 SKU가 존재하지 않습니다.");
+      }
+
+      const productData: any = productSnap.data() || {};
+      const productName = productData.name || "";
+      const productLink = productData.link || "";
+
+      const logsQuery = query(
+        collection(db, "logs"),
+        where("needsReview", "==", true),
+        limit(limitCount)
+      );
+
+      const snapshot = await getDocs(logsQuery);
+
+      const matchedTargets: {
+        logRef: any;
+        items: any[];
+        unmatchedItems: any[];
+        matchedQty: number;
+        matchedCount: number;
+      }[] = [];
+
+      let totalMatchedQty = 0;
+      let totalMatchedCount = 0;
+
+      snapshot.docs.forEach((docSnap) => {
+        const data: any = docSnap.data() || {};
+        const unmatchedItems = Array.isArray(data.unmatchedItems)
+          ? [...data.unmatchedItems]
+          : [];
+
+        if (unmatchedItems.length === 0) return;
+
+        const items = Array.isArray(data.items) ? [...data.items] : [];
+        const remained: any[] = [];
+        let matchedQty = 0;
+        let matchedCount = 0;
+
+        unmatchedItems.forEach((unmatched: any) => {
+          const unmatchedName = this.normalizeUnmatchedText(
+            unmatched.name || ""
+          );
+          const unmatchedSku = (unmatched.sku || "").trim().toUpperCase();
+          const qty = Number(unmatched.qty || 0);
+
+          const isNameMatch =
+            normalizedMatchName && unmatchedName === normalizedMatchName;
+          const isSkuMatch =
+            normalizedOriginalSku && unmatchedSku === normalizedOriginalSku;
+
+          if (isNameMatch || isSkuMatch) {
+            matchedQty += qty;
+            matchedCount += 1;
+            this.replaceUnmatchedPlaceholderItem(
+              items,
+              qty,
+              normalizedSku,
+              productName,
+              productLink
+            );
+          } else {
+            remained.push(unmatched);
+          }
+        });
+
+        if (matchedCount > 0) {
+          matchedTargets.push({
+            logRef: docSnap.ref,
+            items,
+            unmatchedItems: remained,
+            matchedQty,
+            matchedCount
+          });
+          totalMatchedQty += matchedQty;
+          totalMatchedCount += matchedCount;
+        }
+      });
+
+      if (dryRun) {
+        return {
+          success: true,
+          scannedLogs: snapshot.size,
+          updatedLogs: matchedTargets.length,
+          matchedEntries: totalMatchedCount,
+          totalQty: totalMatchedQty,
+          dryRun: true
+        };
+      }
+
+      if (matchedTargets.length === 0) {
+        return {
+          success: true,
+          scannedLogs: snapshot.size,
+          updatedLogs: 0,
+          matchedEntries: 0,
+          totalQty: 0,
+          dryRun: false
+        };
+      }
+
+      await updateDoc(productRef, {
+        stock: increment(-totalMatchedQty),
+        lastUpdated: serverTimestamp()
+      });
+
+      const batch = writeBatch(db);
+
+      matchedTargets.forEach((target) => {
+        batch.update(target.logRef, {
+          items: target.items,
+          unmatchedItems: target.unmatchedItems,
+          needsReview: target.unmatchedItems.length > 0,
+          updatedAt: serverTimestamp()
+        });
+      });
+
+      await batch.commit();
+
+      return {
+        success: true,
+        scannedLogs: snapshot.size,
+        updatedLogs: matchedTargets.length,
+        matchedEntries: totalMatchedCount,
+        totalQty: totalMatchedQty,
+        dryRun: false
+      };
+    } catch (error) {
+      console.error("SKU 일괄 매칭 실패:", error);
+      return {
+        success: false,
+        scannedLogs: 0,
+        updatedLogs: 0,
+        matchedEntries: 0,
+        totalQty: 0,
+        dryRun: Boolean(params?.dryRun)
+      };
     }
   }
   // 🔗 방문수령 주문 병합 (여러 주문을 하나로 묶기)
@@ -943,6 +1151,14 @@ class InventoryService {
         collection(db, "orders", primaryOrderId, "shipments")
       );
 
+      const restoredOrderSummaries: Record<
+        string,
+        {
+          items: any[];
+          total_price: number;
+        }
+      > = {};
+
       for (const shipmentDoc of shipmentsSnap.docs) {
         const shipmentData: any = shipmentDoc.data() || {};
         const items = shipmentData.items || [];
@@ -966,6 +1182,11 @@ class InventoryService {
         // 각 주문으로 shipment 복구
         for (const orderId of Object.keys(itemsByOrder)) {
           const orderItems = itemsByOrder[orderId];
+          const restoredTotalPrice = orderItems.reduce(
+            (sum, i) => sum + Number(i.subtotal || 0),
+            0
+          );
+
           const newShipmentRef = doc(
             collection(db, "orders", orderId, "shipments")
           );
@@ -974,14 +1195,21 @@ class InventoryService {
           const restoredShipmentData = {
             ...shipmentData,
             items: orderItems,
-            total_price: orderItems.reduce(
-              (sum, i) => sum + Number(i.subtotal || 0),
-              0
-            ),
+            total_price: restoredTotalPrice,
             restoredAt: serverTimestamp()
           };
 
           batch.set(newShipmentRef, restoredShipmentData);
+
+          if (!restoredOrderSummaries[orderId]) {
+            restoredOrderSummaries[orderId] = {
+              items: [],
+              total_price: 0
+            };
+          }
+
+          restoredOrderSummaries[orderId].items.push(...orderItems);
+          restoredOrderSummaries[orderId].total_price += restoredTotalPrice;
         }
 
         // delete only if this shipment was originally merged into primary
@@ -990,28 +1218,39 @@ class InventoryService {
         }
       }
 
-      // 🔹 모든 주문 상태 복구
+      // 🔹 모든 주문 상태 / items / total_price 복구
       for (const orderId of mergedOrderIds) {
         const ref = doc(db, "orders", orderId);
+        const restoredSummary = restoredOrderSummaries[orderId] || {
+          items: [],
+          total_price: 0
+        };
 
         batch.set(
           ref,
           {
             status: "READY",
             mergedInto: null,
+            items: restoredSummary.items,
+            total_price: restoredSummary.total_price,
             updatedAt: serverTimestamp()
           },
           { merge: true }
         );
-        // ensure order items are not left empty if shipments were restored
-        // (orders UI often reads items from order doc)
       }
 
-      // 🔹 primary 병합 정보 제거 (items / total_price는 shipment 기반으로 다시 계산되므로 삭제하지 않음)
+      // 🔹 primary 병합 정보 제거 + primary 주문 데이터도 자기 몫만 남기기
+      const primarySummary = restoredOrderSummaries[primaryOrderId] || {
+        items: [],
+        total_price: 0
+      };
+
       batch.set(
         primaryRef,
         {
           mergedOrderIds: [],
+          items: primarySummary.items,
+          total_price: primarySummary.total_price,
           updatedAt: serverTimestamp()
         },
         { merge: true }
