@@ -32,6 +32,70 @@ class InventoryService {
       .trim();
   }
 
+  private normalizePickupName(value: string) {
+    return (value || "")
+      .replace(/\s+/g, "")
+      .trim();
+  }
+
+  private formatPickupCode(customerName: string, baseDate: Date = new Date()) {
+    const safeName = this.normalizePickupName(customerName) || "방문수령";
+    const month = String(baseDate.getMonth() + 1).padStart(2, "0");
+    const day = String(baseDate.getDate()).padStart(2, "0");
+    return `${safeName}-${month}${day}`;
+  }
+
+  private formatPickupItemsText(
+    items: { sku?: string; qty?: number; quantity?: number; name?: string }[]
+  ) {
+    return (items || [])
+      .map((item) => {
+        const productName = (item?.name || "").trim();
+        const qty = Number(item?.qty ?? item?.quantity ?? 0) || 0;
+        return productName ? `${productName} x${qty}` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  private async syncPickupToSheet(params: {
+    orderId: string;
+    customerName: string;
+    phone: string;
+    itemsText: string;
+    pickupCode: string;
+  }) {
+    const webhookUrl = import.meta.env.VITE_PICKUP_SHEET_WEBHOOK_URL;
+    console.log("pickup webhookUrl:", webhookUrl);
+
+    if (!webhookUrl) {
+      console.warn("방문수령 시트 웹훅 URL이 설정되지 않았습니다.");
+      return false;
+    }
+
+    console.log("pickup payload:", {
+      pickupCode: params.pickupCode,
+      name: params.customerName,
+      phone: params.phone,
+      itemsText: params.itemsText,
+      orderNo: params.orderId
+    });
+
+    await fetch(webhookUrl, {
+      method: "POST",
+      mode: "no-cors",
+      body: JSON.stringify({
+        pickupCode: params.pickupCode,
+        name: params.customerName,
+        phone: params.phone,
+        itemsText: params.itemsText,
+        orderNo: params.orderId
+      })
+    });
+
+    return true;
+  }
+
   private replaceUnmatchedPlaceholderItem(
     items: any[],
     targetQty: number,
@@ -313,6 +377,66 @@ class InventoryService {
           "";
       }
 
+      let resolvedPhone =
+        orderData.phone ||
+        orderData.customerPhone ||
+        orderData.buyerPhone ||
+        orderData.receiverPhone ||
+        orderData.tel ||
+        orderData.mobile ||
+        "";
+
+      if (!resolvedPhone && firstShipment) {
+        resolvedPhone =
+          firstShipment.phone ||
+          firstShipment.customerPhone ||
+          firstShipment.buyerPhone ||
+          firstShipment.receiverPhone ||
+          firstShipment.tel ||
+          firstShipment.mobile ||
+          "";
+      }
+
+      const resolvedItems = await Promise.all(
+        items.map(async (item, idx) => {
+          const normalizedSku = (item.sku || "").trim().toUpperCase();
+
+          if (!normalizedSku) {
+            return {
+              sku: `UNMATCHED_${idx}`,
+              originalSku: "",
+              name: item.name || "",
+              quantity: item.qty,
+              link: ""
+            };
+          }
+
+          const productRef = doc(db, "inventory", normalizedSku);
+          const productSnap = await getDoc(productRef);
+
+          if (!productSnap.exists()) {
+            return {
+              sku: `UNMATCHED_${idx}`,
+              originalSku: normalizedSku,
+              name: item.name || "",
+              quantity: item.qty,
+              link: ""
+            };
+          }
+
+          const productData = productSnap.data() || {};
+          const productName = productData.name || item.name || "";
+          const productLink = productData.link || "";
+
+          return {
+            sku: normalizedSku,
+            name: productName,
+            quantity: item.qty,
+            link: productLink
+          };
+        })
+      );
+
       await addDoc(collection(db, "logs"), {
         type: deliveryType,
         deliveryType: deliveryType,
@@ -340,46 +464,25 @@ class InventoryService {
         needsReview: unmatchedItems.length > 0,
         unmatchedItems: unmatchedItems,
         createdAt: serverTimestamp(),
-        items: await Promise.all(
-          items.map(async (item, idx) => {
-            const normalizedSku = (item.sku || "").trim().toUpperCase();
-
-            if (!normalizedSku) {
-              return {
-                sku: `UNMATCHED_${idx}`,
-                originalSku: "",
-                name: "",
-                quantity: item.qty,
-                link: ""
-              };
-            }
-
-            const productRef = doc(db, "inventory", normalizedSku);
-            const productSnap = await getDoc(productRef);
-
-            if (!productSnap.exists()) {
-              return {
-                sku: `UNMATCHED_${idx}`,
-                originalSku: normalizedSku,
-                name: "",
-                quantity: item.qty,
-                link: ""
-              };
-            }
-
-            const productData = productSnap.data() || {};
-            const productName = productData.name || "";
-            const productLink = productData.link || "";
-
-            return {
-              sku: normalizedSku,
-              name: productName,
-              quantity: item.qty,
-              link: productLink
-            };
-          })
-        )
+        items: resolvedItems
       });
+
+      if (deliveryType === "PICKUP") {
+        try {
+          const pickupCode = this.formatPickupCode(resolvedCustomerName, new Date());
+          const pickupItemsText = this.formatPickupItemsText(resolvedItems);
+
+          await this.syncPickupToSheet({
+            orderId,
+            customerName: resolvedCustomerName,
+            phone: resolvedPhone,
+            itemsText: pickupItemsText,
+            pickupCode
+          });
+        } catch (pickupSyncError) {
+          console.error("방문수령 시트 동기화 실패:", pickupSyncError);
+        }
+      }
 
       // 🔹 해당 주문의 모든 shipment도 완료 처리 (아웃바운드 목록에서 사라지도록)
       const batch = writeBatch(db);
@@ -1261,6 +1364,53 @@ class InventoryService {
       return true;
     } catch (error) {
       console.error("방문수령 병합 취소 실패:", error);
+      return false;
+    }
+  }
+  // 🚚 배송 타입 수동 변경 (관리자 UI용)
+  async updateDeliveryType(
+    orderId: string,
+    shipmentId: string | null,
+    newType: "POST" | "VALEX" | "PICKUP"
+  ) {
+    try {
+      const orderRef = doc(db, "orders", orderId);
+      const batch = writeBatch(db);
+
+      // 🔹 order 문서에 deliveryType 반영
+      batch.set(
+        orderRef,
+        {
+          deliveryType: newType,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+
+      // 🔹 shipment가 존재하면 shipment에도 반영
+      if (shipmentId) {
+        const shipmentRef = doc(
+          db,
+          "orders",
+          orderId,
+          "shipments",
+          shipmentId
+        );
+
+        batch.set(
+          shipmentRef,
+          {
+            deliveryType: newType,
+            updatedAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+      }
+
+      await batch.commit();
+      return true;
+    } catch (error) {
+      console.error("배송 타입 변경 실패:", error);
       return false;
     }
   }
