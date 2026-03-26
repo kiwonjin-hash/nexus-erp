@@ -32,10 +32,15 @@ class InventoryService {
       .trim();
   }
 
-  private normalizePickupName(value: string) {
+  private stripPickupDisplaySuffix(value: string) {
     return (value || "")
       .replace(/\s+/g, "")
+      .replace(/[_-]\d{3,4}$/, "")
       .trim();
+  }
+
+  private normalizePickupName(value: string) {
+    return this.stripPickupDisplaySuffix(value);
   }
 
   private normalizePhoneDigits(value: string) {
@@ -526,6 +531,10 @@ class InventoryService {
         ? orderData.mergedOrderIds.map((id: any) => String(id || "").trim()).filter(Boolean)
         : [];
 
+      const pickupDisplayCustomerName = this.stripPickupDisplaySuffix(
+        resolvedCustomerName
+      );
+
       const pickupCustomerKey = this.buildPickupCustomerKey(
         resolvedCustomerName,
         resolvedPhone
@@ -620,7 +629,7 @@ class InventoryService {
       if (deliveryType === "PICKUP") {
         try {
           const pickupCode = this.formatPickupCode(
-            resolvedCustomerName,
+            pickupDisplayCustomerName,
             resolvedPhone,
             new Date()
           );
@@ -628,7 +637,7 @@ class InventoryService {
 
           await this.syncPickupToSheet({
             orderId,
-            customerName: resolvedCustomerName,
+            customerName: pickupDisplayCustomerName,
             phone: resolvedPhone,
             itemsText: pickupItemsText,
             pickupCode
