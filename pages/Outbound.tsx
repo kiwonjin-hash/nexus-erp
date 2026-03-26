@@ -14,7 +14,41 @@ import {
   ArrowRight
 } from 'lucide-react';
 
+
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+
+const normalizePickupName = (value: string = "") =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .trim();
+
+const normalizePhoneDigits = (value: string = "") =>
+  String(value || "")
+    .replace(/\D/g, "")
+    .trim();
+
+const getPhoneLast4 = (value: string = "") => {
+  const digits = normalizePhoneDigits(value);
+  return digits.length >= 4 ? digits.slice(-4) : "";
+};
+
+const getPickupOrderName = (order: any) =>
+  order?.name || order?.receiver || "";
+
+const getPickupOrderPhone = (order: any) =>
+  order?.phone ||
+  order?.customerPhone ||
+  order?.buyerPhone ||
+  order?.receiverPhone ||
+  order?.tel ||
+  order?.mobile ||
+  "";
+
+const getPickupCustomerKey = (order: any) => {
+  const safeName = normalizePickupName(getPickupOrderName(order));
+  const phoneLast4 = getPhoneLast4(getPickupOrderPhone(order));
+  return [safeName, phoneLast4].filter(Boolean).join("_");
+};
 
 const Outbound: React.FC = () => {
   const [trackingInput, setTrackingInput] = useState('');
@@ -109,57 +143,76 @@ const Outbound: React.FC = () => {
         ? "POST"
         : deliveryMode; // "VALEX" or "PICKUP"
 
-    const q = query(
-      collectionGroup(db, "shipments"),
-      where("tracking", "==", tracking.trim()),
-      where("deliveryType", "==", deliveryTypeFilter),
-      where("status", "==", "READY")
-    );
+    const normalizedTracking = tracking.replace(/\D/g, "").trim();
 
-    const snapshot = await getDocs(q);
+    try {
+      const [arraySnapshot, legacySnapshot] = await Promise.all([
+        getDocs(
+          query(
+            collectionGroup(db, "shipments"),
+            where("trackingNumbers", "array-contains", normalizedTracking),
+            where("deliveryType", "==", deliveryTypeFilter),
+            where("status", "==", "READY")
+          )
+        ),
+        getDocs(
+          query(
+            collectionGroup(db, "shipments"),
+            where("tracking", "==", normalizedTracking),
+            where("deliveryType", "==", deliveryTypeFilter),
+            where("status", "==", "READY")
+          )
+        )
+      ]);
 
-    if (snapshot.empty) {
-      setErrorMsg("주문 정보를 찾을 수 없습니다.");
+      const docSnap = arraySnapshot.docs[0] || legacySnapshot.docs[0];
+
+      if (!docSnap) {
+        setErrorMsg("주문 정보를 찾을 수 없습니다.");
+        setActiveOrder(null);
+        return;
+      }
+
+      const shipmentData: any = docSnap.data();
+      const orderRef = docSnap.ref.parent.parent;
+      const orderId = orderRef ? orderRef.id : "";
+
+      const orderData = {
+        id: orderId,
+        ...shipmentData
+      } as Order;
+
+      if (orderData.status === "COMPLETED") {
+        setErrorMsg("이미 출고 완료된 주문입니다.");
+        setActiveOrder(null);
+        return;
+      }
+
+      setActiveOrder(orderData);
+
+      setItemsState(
+        orderData.items.map((item: any) => {
+          const resolvedSku =
+            item.sku ||
+            item.productSku ||
+            item.id ||
+            item.code ||
+            "";
+
+          return {
+            sku: resolvedSku,
+            name: item.name || resolvedSku,
+            requiredQty: item.qty,
+            scannedQty: 0,
+            sourceOrderId: item.sourceOrderId || orderData.id
+          };
+        })
+      );
+    } catch (error) {
+      console.error("운송장 조회 실패:", error);
+      setErrorMsg("주문 조회 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
       setActiveOrder(null);
-      return;
     }
-
-    const docSnap = snapshot.docs[0];
-    const shipmentData: any = docSnap.data();
-    const orderRef = docSnap.ref.parent.parent;
-    const orderId = orderRef ? orderRef.id : "";
-
-    const orderData = {
-      id: orderId,
-      ...shipmentData
-    } as Order;
-
-    if (orderData.status === "COMPLETED") {
-      setErrorMsg("이미 출고 완료된 주문입니다.");
-      setActiveOrder(null);
-      return;
-    }
-
-    setActiveOrder(orderData);
-
-    setItemsState(
-      orderData.items.map((item: any) => {
-        const resolvedSku =
-          item.sku ||
-          item.productSku ||
-          item.id ||
-          item.code ||
-          "";
-
-        return {
-          sku: resolvedSku,
-          name: item.name || resolvedSku,
-          requiredQty: item.qty,
-          scannedQty: 0,
-          sourceOrderId: item.sourceOrderId || orderData.id
-        };
-      })
-    );
   };
 
   const loadValexOrders = async () => {
@@ -312,13 +365,19 @@ const Outbound: React.FC = () => {
       itemsState.map(i => ({ 
         sku: i.sku, 
         qty: i.scannedQty,
-        name: i.name  // 🔥 제품명 함께 전달
+        name: i.name,
+        sourceOrderId: (i as any).sourceOrderId
       })),
-      memo
+      memo,
+      {
+        deliveryType: (activeOrder as any).deliveryType,
+        tracking: (activeOrder as any).tracking,
+        trackingNumbers: (activeOrder as any).trackingNumbers
+      }
     );
 
     if (success) {
-      setSuccessMsg(`주문 ${activeOrder.tracking} 출고 처리가 완료되었습니다.`);
+      setSuccessMsg(`주문 ${(activeOrder as any).tracking || trackingInput} 출고 처리가 완료되었습니다.`);
       setActiveOrder(null);
       setItemsState([]);
       setTrackingInput(""); // 🔥 출고 완료 후 운송장 입력값 초기화
@@ -342,12 +401,19 @@ const Outbound: React.FC = () => {
 
   // Derived variables for searching and pagination
   const filteredOrders = pendingOrders.filter((order) => {
-    const keyword = orderSearch.toLowerCase();
+    const keyword = orderSearch.toLowerCase().trim();
+    const keywordDigits = normalizePhoneDigits(orderSearch);
+    const orderPhone = getPickupOrderPhone(order);
+    const orderPhoneDigits = normalizePhoneDigits(orderPhone);
+    const orderPhoneLast4 = getPhoneLast4(orderPhone);
+
     return (
       (order.name && order.name.toLowerCase().includes(keyword)) ||
       (order.receiver && order.receiver.toLowerCase().includes(keyword)) ||
       (order.order_no && String(order.order_no).includes(keyword)) ||
-      (order.phone && String(order.phone).includes(keyword))
+      (orderPhone && String(orderPhone).includes(keyword)) ||
+      (keywordDigits && orderPhoneDigits.includes(keywordDigits)) ||
+      (keywordDigits && orderPhoneLast4.includes(keywordDigits))
     );
   });
 
@@ -489,10 +555,15 @@ const Outbound: React.FC = () => {
                     const baseOrder = pendingOrders.find(o => o.id === selectedPickupOrders[0]);
                     if (!baseOrder) return;
 
-                    const baseName = baseOrder.name || baseOrder.receiver;
+                    const baseCustomerKey = getPickupCustomerKey(baseOrder);
+
+                    if (!baseCustomerKey) {
+                      alert("선택한 주문의 고객명 또는 연락처 정보가 부족합니다.");
+                      return;
+                    }
 
                     const sameCustomerOrders = pendingOrders
-                      .filter(o => (o.name || o.receiver) === baseName)
+                      .filter(o => getPickupCustomerKey(o) === baseCustomerKey)
                       .map(o => o.id);
 
                     setSelectedPickupOrders(sameCustomerOrders);
@@ -518,11 +589,13 @@ const Outbound: React.FC = () => {
                       selectedPickupOrders.includes(o.id)
                     );
 
-                    const names = selectedOrders.map(o => o.name || o.receiver);
-                    const uniqueNames = [...new Set(names)];
+                    const customerKeys = selectedOrders
+                      .map(o => getPickupCustomerKey(o))
+                      .filter(Boolean);
+                    const uniqueCustomerKeys = [...new Set(customerKeys)];
 
-                    if (uniqueNames.length > 1) {
-                      alert("다른 고객의 주문은 병합할 수 없습니다.");
+                    if (customerKeys.length !== selectedOrders.length || uniqueCustomerKeys.length > 1) {
+                      alert("이름과 연락처 뒤 4자리가 같은 주문만 병합할 수 있습니다.");
                       return;
                     }
 
@@ -607,10 +680,17 @@ const Outbound: React.FC = () => {
                         onClick={async (e) => {
                           e.stopPropagation();
 
-                          const baseName = order.name || order.receiver;
+                          const baseName = getPickupOrderName(order);
+                          const basePhoneLast4 = getPhoneLast4(getPickupOrderPhone(order));
+                          const baseCustomerKey = getPickupCustomerKey(order);
+
+                          if (!baseCustomerKey) {
+                            alert("고객명 또는 연락처 정보가 부족하여 병합할 수 없습니다.");
+                            return;
+                          }
 
                           const sameCustomerOrders = pendingOrders
-                            .filter(o => (o.name || o.receiver) === baseName)
+                            .filter(o => getPickupCustomerKey(o) === baseCustomerKey)
                             .map(o => o.id);
 
                           if (sameCustomerOrders.length < 2) {
@@ -619,7 +699,7 @@ const Outbound: React.FC = () => {
                           }
 
                           const confirmMerge = window.confirm(
-                            `${baseName} 고객 주문 ${sameCustomerOrders.length}건을 병합하시겠습니까?`
+                            `${baseName} (${basePhoneLast4}) 고객 주문 ${sameCustomerOrders.length}건을 병합하시겠습니까?`
                           );
 
                           if (!confirmMerge) return;
@@ -728,7 +808,9 @@ const Outbound: React.FC = () => {
               </p>
 
               <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-                {activeOrder.tracking}
+                {(activeOrder as any).trackingNumbers?.length > 0
+                  ? (activeOrder as any).trackingNumbers.join(", ")
+                  : activeOrder.tracking}
               </h2>
 
               <div className="text-sm text-slate-600 mt-2 space-y-1">

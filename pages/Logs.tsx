@@ -13,9 +13,11 @@ type UnifiedLog = {
     name: string;
     quantity: number;
     link?: string;
+    sourceOrderId?: string;
   }[];
   operator?: string;
   orderId?: string;
+  mergedOrderIds?: string[];
   trackingNumber?: string;
   customerName?: string;
   memo?: string;
@@ -27,6 +29,69 @@ type UnifiedLog = {
     reason: string;
   }[];
   date: string;
+};
+
+
+const getOrderIdsFromLog = (log: UnifiedLog): string[] => {
+  const merged = Array.isArray(log.mergedOrderIds)
+    ? log.mergedOrderIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  const single = String(log.orderId || "")
+    .split(/[\n,]+/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  return [...new Set([...merged, ...single])];
+};
+
+const getGroupedItemsFromLog = (log: UnifiedLog) => {
+  const fallbackOrderIds = getOrderIdsFromLog(log);
+  const fallbackOrderId = fallbackOrderIds[0] || String(log.orderId || "").trim() || "주문번호 없음";
+
+  const grouped = new Map<
+    string,
+    {
+      orderId: string;
+      items: UnifiedLog["items"];
+    }
+  >();
+
+  log.items.forEach((item) => {
+    const itemOrderId = String(item.sourceOrderId || fallbackOrderId || "주문번호 없음").trim();
+
+    if (!grouped.has(itemOrderId)) {
+      grouped.set(itemOrderId, {
+        orderId: itemOrderId,
+        items: []
+      });
+    }
+
+    grouped.get(itemOrderId)!.items.push(item);
+  });
+
+  return Array.from(grouped.values());
+};
+
+const renderLogItemName = (item: UnifiedLog["items"][number]) => {
+  if (item.link) {
+    return (
+      <a
+        href={item.link}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 hover:underline"
+      >
+        {item.name || item.sku || "제품명 없음"}
+      </a>
+    );
+  }
+
+  return (
+    <span className="text-slate-900">
+      {item.name || item.sku || "제품명 없음"}
+    </span>
+  );
 };
 
 const Logs: React.FC = () => {
@@ -352,22 +417,19 @@ const Logs: React.FC = () => {
                 </td>
 
                 <td className="px-6 py-4 text-slate-900 font-medium">
-                  {log.items.map((item, idx) => (
-                    <div key={idx} className="leading-6">
-                      {item.link ? (
-                        <a
-                          href={item.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline"
-                        >
-                          {item.name || item.sku || "제품명 없음"}
-                        </a>
-                      ) : (
-                        <span className="text-slate-900">
-                          {item.name || item.sku || "제품명 없음"}
-                        </span>
-                      )}
+                  {getGroupedItemsFromLog(log).map((group, groupIdx) => (
+                    <div
+                      key={`${group.orderId}-${groupIdx}`}
+                      className={groupIdx > 0 ? "mt-3 pt-3 border-t border-slate-200" : ""}
+                    >
+                      <div className="text-xs font-semibold text-slate-500 mb-1">
+                        주문번호: {group.orderId}
+                      </div>
+                      {group.items.map((item, idx) => (
+                        <div key={`${group.orderId}-${idx}`} className="leading-6">
+                          {renderLogItemName(item)}
+                        </div>
+                      ))}
                     </div>
                   ))}
                   {log.memo && (
@@ -392,9 +454,19 @@ const Logs: React.FC = () => {
                 </td>
 
                 <td className="px-6 py-4 text-right font-bold text-red-600">
-                  {log.items.map((item, idx) => (
-                    <div key={idx} className="leading-6">
-                      -{item.quantity}
+                  {getGroupedItemsFromLog(log).map((group, groupIdx) => (
+                    <div
+                      key={`${group.orderId}-${groupIdx}`}
+                      className={groupIdx > 0 ? "mt-3 pt-3 border-t border-slate-200" : ""}
+                    >
+                      <div className="text-xs font-semibold text-transparent mb-1 select-none">
+                        주문번호: {group.orderId}
+                      </div>
+                      {group.items.map((item, idx) => (
+                        <div key={`${group.orderId}-${idx}`} className="leading-6">
+                          -{item.quantity}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </td>
@@ -488,34 +560,54 @@ const Logs: React.FC = () => {
               </div>
               <div>
                 <b>상품 목록:</b>
-                <div className="mt-2 space-y-1">
-                  {selectedLog.items.map((item, idx) => (
-                    <div key={idx} className="border rounded px-3 py-2 bg-slate-50">
-                      <div>
-                        <b>제품명:</b>{" "}
-                        {item.link ? (
-                          <a
-                            href={item.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
-                          >
-                            {item.name || item.sku || "제품명 없음"}
-                          </a>
-                        ) : (
-                          <span className="text-slate-900">
-                            {item.name || item.sku || "제품명 없음"}
-                          </span>
-                        )}
+                <div className="mt-2 space-y-3">
+                  {getGroupedItemsFromLog(selectedLog).map((group, groupIdx) => (
+                    <div key={`${group.orderId}-${groupIdx}`} className="space-y-2">
+                      <div className="text-sm font-semibold text-slate-600">
+                        주문번호: {group.orderId}
                       </div>
-                      <div><b>SKU:</b> {item.sku}</div>
-                      <div><b>수량:</b> -{item.quantity}</div>
+                      {group.items.map((item, idx) => (
+                        <div key={`${group.orderId}-${idx}`} className="border rounded px-3 py-2 bg-slate-50">
+                          <div>
+                            <b>제품명:</b>{" "}
+                            {renderLogItemName(item)}
+                          </div>
+                          <div><b>SKU:</b> {item.sku}</div>
+                          <div><b>수량:</b> -{item.quantity}</div>
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
               </div>
               <div><b>주문자:</b> {selectedLog.customerName || "-"}</div>
-              <div><b>주문번호:</b> {selectedLog.orderId || "-"}</div>
+              <div>
+                <b>주문번호:</b>
+                {(() => {
+                  const orderIds = getOrderIdsFromLog(selectedLog);
+
+                  if (orderIds.length === 0) {
+                    return <span> -</span>;
+                  }
+
+                  if (orderIds.length === 1) {
+                    return <span> {orderIds[0]}</span>;
+                  }
+
+                  return (
+                    <div className="mt-2 space-y-1">
+                      {orderIds.map((orderId, idx) => (
+                        <div
+                          key={`${orderId}-${idx}`}
+                          className="border rounded px-3 py-2 bg-slate-50"
+                        >
+                          {orderId}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
               <div><b>송장번호:</b> {selectedLog.trackingNumber || "-"}</div>
               <div><b>작업자:</b> {selectedLog.operator || "-"}</div>
               {selectedLog.memo && (

@@ -38,11 +38,121 @@ class InventoryService {
       .trim();
   }
 
-  private formatPickupCode(customerName: string, baseDate: Date = new Date()) {
-    const safeName = this.normalizePickupName(customerName) || "방문수령";
+  private normalizePhoneDigits(value: string) {
+    return (value || "")
+      .replace(/\D/g, "")
+      .trim();
+  }
+
+  private getPhoneLast4(value: string) {
+    const digits = this.normalizePhoneDigits(value);
+    return digits.length >= 4 ? digits.slice(-4) : "";
+  }
+
+  private buildPickupCustomerKey(customerName: string, phone: string) {
+    const safeName = this.normalizePickupName(customerName);
+    const phoneLast4 = this.getPhoneLast4(phone);
+    return [safeName, phoneLast4].filter(Boolean).join("_");
+  }
+
+  private normalizeTrackingNumber(value: string) {
+    return (value || "")
+      .replace(/\D/g, "")
+      .trim();
+  }
+
+  private extractTrackingNumbersFromValue(value: any) {
+    if (Array.isArray(value)) {
+      return [...new Set(
+        value
+          .map((entry) => this.normalizeTrackingNumber(String(entry || "")))
+          .filter(Boolean)
+      )];
+    }
+
+    return [...new Set(
+      String(value || "")
+        .split(/[\n,\/|]+/)
+        .map((entry) => this.normalizeTrackingNumber(entry))
+        .filter(Boolean)
+    )];
+  }
+
+  private getAllTrackingNumbers(orderData: any, shipmentDocs: any[] = []) {
+    const trackingNumbers = new Set<string>();
+
+    const appendFromValue = (value: any) => {
+      this.extractTrackingNumbersFromValue(value).forEach((tracking) => {
+        trackingNumbers.add(tracking);
+      });
+    };
+
+    appendFromValue(orderData?.tracking);
+    appendFromValue(orderData?.trackingNumber);
+    appendFromValue(orderData?.trackingNumbers);
+
+    shipmentDocs.forEach((shipmentDoc: any) => {
+      const shipmentData = typeof shipmentDoc?.data === "function"
+        ? shipmentDoc.data() || {}
+        : shipmentDoc || {};
+
+      appendFromValue(shipmentData?.tracking);
+      appendFromValue(shipmentData?.trackingNumber);
+      appendFromValue(shipmentData?.trackingNumbers);
+    });
+
+    return Array.from(trackingNumbers);
+  }
+
+  private findMatchedShipmentData(
+    shipmentDocs: any[] = [],
+    candidateTrackingNumbers: string[] = []
+  ) {
+    const normalizedCandidates = [...new Set(
+      (candidateTrackingNumbers || [])
+        .map((value) => this.normalizeTrackingNumber(String(value || "")))
+        .filter(Boolean)
+    )];
+
+    const normalizedShipmentDocs = shipmentDocs.map((shipmentDoc: any) => ({
+      doc: shipmentDoc,
+      data:
+        typeof shipmentDoc?.data === "function"
+          ? shipmentDoc.data() || {}
+          : shipmentDoc || {}
+    }));
+
+    if (normalizedCandidates.length === 0) {
+      return normalizedShipmentDocs[0] || null;
+    }
+
+    for (const shipmentEntry of normalizedShipmentDocs) {
+      const shipmentTrackingNumbers = [
+        ...new Set([
+          ...this.extractTrackingNumbersFromValue(shipmentEntry.data?.trackingNumbers),
+          ...this.extractTrackingNumbersFromValue(shipmentEntry.data?.trackingNumber),
+          ...this.extractTrackingNumbersFromValue(shipmentEntry.data?.tracking)
+        ])
+      ];
+
+      if (shipmentTrackingNumbers.some((value) => normalizedCandidates.includes(value))) {
+        return shipmentEntry;
+      }
+    }
+
+    return normalizedShipmentDocs[0] || null;
+  }
+
+  private formatPickupCode(
+    customerName: string,
+    phone: string,
+    baseDate: Date = new Date()
+  ) {
+    const safeCustomerKey =
+      this.buildPickupCustomerKey(customerName, phone) || "방문수령";
     const month = String(baseDate.getMonth() + 1).padStart(2, "0");
     const day = String(baseDate.getDate()).padStart(2, "0");
-    return `${safeName}-${month}${day}`;
+    return `${safeCustomerKey}-${month}${day}`;
   }
 
   private formatPickupItemsText(
@@ -257,8 +367,13 @@ class InventoryService {
 
   async completeOrder(
     orderId: string,
-    items: { sku: string; qty: number; name?: string }[],
-    memo: string = ""
+    items: { sku: string; qty: number; name?: string; sourceOrderId?: string }[],
+    memo: string = "",
+    options?: {
+      deliveryType?: "POST" | "VALEX" | "PICKUP" | string;
+      tracking?: string;
+      trackingNumbers?: string[];
+    }
   ) {
     try {
       const unmatchedItems: {
@@ -312,24 +427,34 @@ class InventoryService {
         collection(db, "orders", orderId, "shipments")
       );
 
-      // 첫 번째 shipment 데이터 추출
-      const firstShipment = !shipmentsSnap.empty 
-        ? (shipmentsSnap.docs[0].data() as any) 
-        : null;
+      const optionTrackingNumbers = [
+        ...new Set([
+          ...this.extractTrackingNumbersFromValue(options?.trackingNumbers),
+          ...this.extractTrackingNumbersFromValue(options?.tracking)
+        ])
+      ];
 
-      // 🔥 trackingNumber 결정 (order → shipment 순서)
-      const trackingNumber =
-        orderData.tracking ||
-        orderData.trackingNumber ||
-        firstShipment?.trackingNumber ||
-        firstShipment?.tracking ||
-        "";
+      // 현재 outbound에서 선택한 송장 기준으로 가장 잘 맞는 shipment 우선 선택
+      const matchedShipmentEntry = this.findMatchedShipmentData(
+        shipmentsSnap.docs,
+        optionTrackingNumbers
+      );
+      const matchedShipment = matchedShipmentEntry?.data || null;
 
-      // 🔥 deliveryType 결정 (order → shipment → fallback 순서)
-      let deliveryType = orderData.deliveryType;
+      // 🔥 trackingNumber / trackingNumbers 결정 (outbound 전달값 → order + shipment 순서)
+      const trackingNumbers = [
+        ...new Set([
+          ...optionTrackingNumbers,
+          ...this.getAllTrackingNumbers(orderData, shipmentsSnap.docs)
+        ])
+      ];
+      const trackingNumber = trackingNumbers[0] || "";
 
-      if (!deliveryType && firstShipment) {
-        deliveryType = firstShipment.deliveryType || firstShipment.type;
+      // 🔥 deliveryType 결정 (outbound 전달값 → order → matched shipment → fallback 순서)
+      let deliveryType = options?.deliveryType || orderData.deliveryType;
+
+      if (!deliveryType && matchedShipment) {
+        deliveryType = matchedShipment.deliveryType || matchedShipment.type;
       }
 
       if (!deliveryType) {
@@ -367,13 +492,13 @@ class InventoryService {
         "";
 
       // order 문서에 이름이 없으면 shipment에서 다시 확인
-      if (!resolvedCustomerName && firstShipment) {
+      if (!resolvedCustomerName && matchedShipment) {
         resolvedCustomerName =
-          firstShipment.name ||
-          firstShipment.customerName ||
-          firstShipment.buyerName ||
-          firstShipment.receiverName ||
-          firstShipment.receiver ||
+          matchedShipment.name ||
+          matchedShipment.customerName ||
+          matchedShipment.buyerName ||
+          matchedShipment.receiverName ||
+          matchedShipment.receiver ||
           "";
       }
 
@@ -386,16 +511,25 @@ class InventoryService {
         orderData.mobile ||
         "";
 
-      if (!resolvedPhone && firstShipment) {
+      if (!resolvedPhone && matchedShipment) {
         resolvedPhone =
-          firstShipment.phone ||
-          firstShipment.customerPhone ||
-          firstShipment.buyerPhone ||
-          firstShipment.receiverPhone ||
-          firstShipment.tel ||
-          firstShipment.mobile ||
+          matchedShipment.phone ||
+          matchedShipment.customerPhone ||
+          matchedShipment.buyerPhone ||
+          matchedShipment.receiverPhone ||
+          matchedShipment.tel ||
+          matchedShipment.mobile ||
           "";
       }
+
+      const mergedOrderIds = Array.isArray(orderData.mergedOrderIds)
+        ? orderData.mergedOrderIds.map((id: any) => String(id || "").trim()).filter(Boolean)
+        : [];
+
+      const pickupCustomerKey = this.buildPickupCustomerKey(
+        resolvedCustomerName,
+        resolvedPhone
+      );
 
       const resolvedItems = await Promise.all(
         items.map(async (item, idx) => {
@@ -407,7 +541,8 @@ class InventoryService {
               originalSku: "",
               name: item.name || "",
               quantity: item.qty,
-              link: ""
+              link: "",
+              sourceOrderId: item.sourceOrderId || orderId
             };
           }
 
@@ -420,7 +555,8 @@ class InventoryService {
               originalSku: normalizedSku,
               name: item.name || "",
               quantity: item.qty,
-              link: ""
+              link: "",
+              sourceOrderId: item.sourceOrderId || orderId
             };
           }
 
@@ -432,7 +568,8 @@ class InventoryService {
             sku: normalizedSku,
             name: productName,
             quantity: item.qty,
-            link: productLink
+            link: productLink,
+            sourceOrderId: item.sourceOrderId || orderId
           };
         })
       );
@@ -441,6 +578,7 @@ class InventoryService {
         type: deliveryType,
         deliveryType: deliveryType,
         orderId,
+        mergedOrderIds,
         operator:
           (typeof window !== "undefined" &&
             window.localStorage &&
@@ -448,18 +586,30 @@ class InventoryService {
           "Unknown",
         customerName: resolvedCustomerName,
         customerNameLower: resolvedCustomerName.toLowerCase(),
-        skuList: items.map(item => item.sku.trim().toUpperCase()),
+        customerPhone: resolvedPhone,
+        customerPhoneLast4: this.getPhoneLast4(resolvedPhone),
+        pickupCustomerKey,
+        skuList: items.map(item => item.sku.trim().toUpperCase()).filter(Boolean),
         productNameTokens,
         searchableText: (
           productNames +
           " " +
           orderId +
           " " +
+          mergedOrderIds.join(" ") +
+          " " +
           (orderData.name || "") +
+          " " +
+          resolvedCustomerName +
+          " " +
+          resolvedPhone +
+          " " +
+          trackingNumbers.join(" ") +
           " " +
           items.map(item => item.sku).join(" ")
         ).toLowerCase(),
-        trackingNumber: trackingNumber,
+        trackingNumber: trackingNumbers.join(","),
+        trackingNumbers,
         memo: memo || "",
         needsReview: unmatchedItems.length > 0,
         unmatchedItems: unmatchedItems,
@@ -469,7 +619,11 @@ class InventoryService {
 
       if (deliveryType === "PICKUP") {
         try {
-          const pickupCode = this.formatPickupCode(resolvedCustomerName, new Date());
+          const pickupCode = this.formatPickupCode(
+            resolvedCustomerName,
+            resolvedPhone,
+            new Date()
+          );
           const pickupItemsText = this.formatPickupItemsText(resolvedItems);
 
           await this.syncPickupToSheet({
@@ -484,25 +638,45 @@ class InventoryService {
         }
       }
 
-      // 🔹 해당 주문의 모든 shipment도 완료 처리 (아웃바운드 목록에서 사라지도록)
+      // 🔹 현재 outbound에서 선택된 shipment만 완료 처리
       const batch = writeBatch(db);
 
-      shipmentsSnap.docs.forEach((shipmentDoc) => {
+      if (matchedShipmentEntry?.doc?.ref) {
         batch.set(
-          shipmentDoc.ref,
+          matchedShipmentEntry.doc.ref,
           {
             status: "COMPLETED",
+            deliveryType,
+            tracking: trackingNumber,
+            trackingNumbers,
             completedAt: serverTimestamp()
           },
           { merge: true }
         );
-      });
+      }
+
+      // 매칭된 shipment가 없을 때만 전체 shipment 상태를 최소한으로 완료 처리
+      if (!matchedShipmentEntry?.doc?.ref) {
+        shipmentsSnap.docs.forEach((shipmentDoc) => {
+          batch.set(
+            shipmentDoc.ref,
+            {
+              status: "COMPLETED",
+              completedAt: serverTimestamp()
+            },
+            { merge: true }
+          );
+        });
+      }
 
       // 주문 상태도 완료로 변경
       batch.set(
         orderRef,
         {
           status: "COMPLETED",
+          deliveryType,
+          tracking: trackingNumber,
+          trackingNumbers,
           completedAt: serverTimestamp()
         },
         { merge: true }
@@ -518,15 +692,30 @@ class InventoryService {
   }
 
   async getOrderByTracking(trackingNumber: string) {
-    const q = query(
-      collectionGroup(db, "shipments"),
-      where("tracking", "==", trackingNumber)
-    );
+    const normalizedTracking = this.normalizeTrackingNumber(trackingNumber || "");
 
-    const snapshot = await getDocs(q);
-    if (snapshot.empty) return null;
+    if (!normalizedTracking) return null;
 
-    const docSnap = snapshot.docs[0];
+    const [arraySnapshot, legacySnapshot] = await Promise.all([
+      getDocs(
+        query(
+          collectionGroup(db, "shipments"),
+          where("trackingNumbers", "array-contains", normalizedTracking),
+          limit(1)
+        )
+      ),
+      getDocs(
+        query(
+          collectionGroup(db, "shipments"),
+          where("tracking", "==", normalizedTracking),
+          limit(1)
+        )
+      )
+    ]);
+
+    const docSnap = arraySnapshot.docs[0] || legacySnapshot.docs[0];
+    if (!docSnap) return null;
+
     const data: any = docSnap.data();
 
     // parent orderId 추출 (orders/{orderId}/shipments/{shipmentId})
@@ -583,6 +772,9 @@ class InventoryService {
         customerName: data.customerName || "",
         orderId: data.orderId || "",
         trackingNumber: data.trackingNumber || "",
+        trackingNumbers: Array.isArray(data.trackingNumbers)
+          ? data.trackingNumbers
+          : this.extractTrackingNumbersFromValue(data.trackingNumber),
         memo: data.memo || "",
         needsReview: data.needsReview || false,
         unmatchedItems: data.unmatchedItems || [],
@@ -605,36 +797,82 @@ class InventoryService {
     limitCount: number = 50,
     lastDoc?: QueryDocumentSnapshot<DocumentData>
   ) {
-    let q;
+    const normalizedOrderId = String(orderId || "").trim();
 
-    if (lastDoc) {
-      q = query(
-        collection(db, "logs"),
-        where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("orderId", "==", orderId),
-        orderBy("createdAt", "desc"),
-        startAfter(lastDoc),
-        limit(limitCount)
-      );
-    } else {
-      q = query(
-        collection(db, "logs"),
-        where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("orderId", "==", orderId),
-        orderBy("createdAt", "desc"),
-        limit(limitCount)
-      );
+    if (!normalizedOrderId) {
+      return [] as any;
     }
 
-    const snapshot = await getDocs(q);
+    const buildPrimaryQuery = (cursor?: QueryDocumentSnapshot<DocumentData>) => {
+      if (cursor) {
+        return query(
+          collection(db, "logs"),
+          where("type", "in", ["POST", "VALEX", "PICKUP"]),
+          where("orderId", "==", normalizedOrderId),
+          orderBy("createdAt", "desc"),
+          startAfter(cursor),
+          limit(limitCount)
+        );
+      }
 
-    const logs: any[] = snapshot.docs.map(docSnap => ({
-      id: docSnap.id,
-      ...docSnap.data()
-    }));
+      return query(
+        collection(db, "logs"),
+        where("type", "in", ["POST", "VALEX", "PICKUP"]),
+        where("orderId", "==", normalizedOrderId),
+        orderBy("createdAt", "desc"),
+        limit(limitCount)
+      );
+    };
+
+    const buildMergedQuery = (cursor?: QueryDocumentSnapshot<DocumentData>) => {
+      if (cursor) {
+        return query(
+          collection(db, "logs"),
+          where("type", "in", ["POST", "VALEX", "PICKUP"]),
+          where("mergedOrderIds", "array-contains", normalizedOrderId),
+          orderBy("createdAt", "desc"),
+          startAfter(cursor),
+          limit(limitCount)
+        );
+      }
+
+      return query(
+        collection(db, "logs"),
+        where("type", "in", ["POST", "VALEX", "PICKUP"]),
+        where("mergedOrderIds", "array-contains", normalizedOrderId),
+        orderBy("createdAt", "desc"),
+        limit(limitCount)
+      );
+    };
+
+    const [primarySnapshot, mergedSnapshot] = await Promise.all([
+      getDocs(buildPrimaryQuery(lastDoc)),
+      getDocs(buildMergedQuery(lastDoc))
+    ]);
+
+    const mergedDocs = new Map<string, any>();
+
+    [...primarySnapshot.docs, ...mergedSnapshot.docs].forEach((docSnap) => {
+      if (!mergedDocs.has(docSnap.id)) {
+        mergedDocs.set(docSnap.id, {
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      }
+    });
+
+    const logs: any[] = Array.from(mergedDocs.values())
+      .sort((a: any, b: any) => {
+        const aSeconds = a.createdAt?.seconds || 0;
+        const bSeconds = b.createdAt?.seconds || 0;
+        return bSeconds - aSeconds;
+      })
+      .slice(0, limitCount);
 
     (logs as any).lastVisible =
-      snapshot.docs[snapshot.docs.length - 1] || null;
+      primarySnapshot.docs[primarySnapshot.docs.length - 1] ||
+      mergedSnapshot.docs[mergedSnapshot.docs.length - 1] ||
+      null;
 
     return logs;
   }
@@ -645,37 +883,80 @@ class InventoryService {
     limitCount: number = 50,
     lastDoc?: QueryDocumentSnapshot<DocumentData>
   ) {
-    const normalizedTracking = (trackingNumber || "").trim();
-    let q;
+    const normalizedTracking = this.normalizeTrackingNumber(trackingNumber || "");
 
-    if (lastDoc) {
-      q = query(
-        collection(db, "logs"),
-        where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("trackingNumber", "==", normalizedTracking),
-        orderBy("createdAt", "desc"),
-        startAfter(lastDoc),
-        limit(limitCount)
-      );
-    } else {
-      q = query(
-        collection(db, "logs"),
-        where("type", "in", ["POST", "VALEX", "PICKUP"]),
-        where("trackingNumber", "==", normalizedTracking),
-        orderBy("createdAt", "desc"),
-        limit(limitCount)
-      );
+    if (!normalizedTracking) {
+      return [] as any;
     }
 
-    const snapshot = await getDocs(q);
+    const buildArrayQuery = (cursor?: QueryDocumentSnapshot<DocumentData>) => {
+      if (cursor) {
+        return query(
+          collection(db, "logs"),
+          where("type", "in", ["POST", "VALEX", "PICKUP"]),
+          where("trackingNumbers", "array-contains", normalizedTracking),
+          orderBy("createdAt", "desc"),
+          startAfter(cursor),
+          limit(limitCount)
+        );
+      }
 
-    const logs: any[] = snapshot.docs.map(docSnap => ({
-      id: docSnap.id,
-      ...docSnap.data()
-    }));
+      return query(
+        collection(db, "logs"),
+        where("type", "in", ["POST", "VALEX", "PICKUP"]),
+        where("trackingNumbers", "array-contains", normalizedTracking),
+        orderBy("createdAt", "desc"),
+        limit(limitCount)
+      );
+    };
+
+    const buildLegacyQuery = (cursor?: QueryDocumentSnapshot<DocumentData>) => {
+      if (cursor) {
+        return query(
+          collection(db, "logs"),
+          where("type", "in", ["POST", "VALEX", "PICKUP"]),
+          where("trackingNumber", "==", normalizedTracking),
+          orderBy("createdAt", "desc"),
+          startAfter(cursor),
+          limit(limitCount)
+        );
+      }
+
+      return query(
+        collection(db, "logs"),
+        where("type", "in", ["POST", "VALEX", "PICKUP"]),
+        where("trackingNumber", "==", normalizedTracking),
+        orderBy("createdAt", "desc"),
+        limit(limitCount)
+      );
+    };
+
+    const [arraySnapshot, legacySnapshot] = await Promise.all([
+      getDocs(buildArrayQuery(lastDoc)),
+      getDocs(buildLegacyQuery(lastDoc))
+    ]);
+
+    const mergedDocs = new Map<string, any>();
+
+    [...arraySnapshot.docs, ...legacySnapshot.docs].forEach((docSnap) => {
+      if (!mergedDocs.has(docSnap.id)) {
+        mergedDocs.set(docSnap.id, {
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      }
+    });
+
+    const logs: any[] = Array.from(mergedDocs.values()).sort((a: any, b: any) => {
+      const aSeconds = a.createdAt?.seconds || 0;
+      const bSeconds = b.createdAt?.seconds || 0;
+      return bSeconds - aSeconds;
+    }).slice(0, limitCount);
 
     (logs as any).lastVisible =
-      snapshot.docs[snapshot.docs.length - 1] || null;
+      arraySnapshot.docs[arraySnapshot.docs.length - 1] ||
+      legacySnapshot.docs[legacySnapshot.docs.length - 1] ||
+      null;
 
     return logs;
   }
@@ -830,12 +1111,16 @@ class InventoryService {
         .split(/\s+/)
         .filter(Boolean);
 
+      const trackingNumbers = this.getAllTrackingNumbers(data, []);
+
       const searchableText = (
         productNames +
         " " +
         (data.orderId || "") +
         " " +
         (data.customerName || "") +
+        " " +
+        trackingNumbers.join(" ") +
         " " +
         skuList.join(" ")
       ).toLowerCase();
@@ -844,7 +1129,11 @@ class InventoryService {
         skuList,
         customerNameLower,
         searchableText,
-        productNameTokens
+        productNameTokens,
+        trackingNumbers,
+        trackingNumber: trackingNumbers.length > 0
+          ? trackingNumbers.join(",")
+          : (data.trackingNumber || "")
       });
     });
 
@@ -1212,12 +1501,28 @@ class InventoryService {
         }
       }
 
-      // primary 주문 업데이트 (add mergedOrderIds for UI context)
+      const primaryOrderData = primarySnap.exists() ? (primarySnap.data() as any) || {} : {};
+      const primaryPhone =
+        primaryOrderData.phone ||
+        primaryOrderData.customerPhone ||
+        primaryOrderData.buyerPhone ||
+        primaryOrderData.receiverPhone ||
+        primaryOrderData.tel ||
+        primaryOrderData.mobile ||
+        "";
+      const primaryName =
+        primaryOrderData.name ||
+        primaryOrderData.customerName ||
+        primaryOrderData.buyerName ||
+        primaryOrderData.receiverName ||
+        "";
+
       batch.set(primaryRef, {
         items: mergedItems,
         total_price: mergedTotalPrice,
         status: "READY",
         mergedOrderIds: orderIds,
+        pickupCustomerKey: this.buildPickupCustomerKey(primaryName, primaryPhone),
         updatedAt: serverTimestamp()
       }, { merge: true });
 
