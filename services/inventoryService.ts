@@ -35,7 +35,7 @@ class InventoryService {
   private stripPickupDisplaySuffix(value: string) {
     return (value || "")
       .replace(/\s+/g, "")
-      .replace(/[_-]\d{3,4}$/, "")
+      .replace(/[_-]\d{3,4}(?:-\d+)?$/, "")
       .trim();
   }
 
@@ -153,11 +153,10 @@ class InventoryService {
     phone: string,
     baseDate: Date = new Date()
   ) {
-    const safeCustomerKey =
-      this.buildPickupCustomerKey(customerName, phone) || "방문수령";
+    const safeCustomerName = this.normalizePickupName(customerName) || "방문수령";
     const month = String(baseDate.getMonth() + 1).padStart(2, "0");
     const day = String(baseDate.getDate()).padStart(2, "0");
-    return `${safeCustomerKey}-${month}${day}`;
+    return `${safeCustomerName}-${month}${day}`;
   }
 
   private formatPickupItemsText(
