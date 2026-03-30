@@ -199,10 +199,14 @@ const Outbound: React.FC = () => {
             item.code ||
             "";
 
+          const normalizedSku = String(resolvedSku || "")
+            .trim()
+            .toUpperCase();
+
           return {
-            sku: resolvedSku,
-            name: item.name || resolvedSku,
-            requiredQty: item.qty,
+            sku: normalizedSku,
+            name: item.name || normalizedSku,
+            requiredQty: Number(item.qty ?? item.quantity ?? 0),
             scannedQty: 0,
             sourceOrderId: item.sourceOrderId || orderData.id
           };
@@ -259,25 +263,28 @@ const Outbound: React.FC = () => {
 
       const pickupOrders = await Promise.all(
         snapshot.docs.map(async (docSnap) => {
-          const data: any = docSnap.data();
+          const shipmentData: any = docSnap.data();
           const orderRef = docSnap.ref.parent.parent;
 
           if (!orderRef) return null;
 
           const orderDoc = await getDoc(orderRef);
+          const orderData: any = orderDoc.exists() ? orderDoc.data() : {};
 
-          let orderData: any = {};
+          const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+          const orderStatus = String(orderData?.status || "").trim().toUpperCase();
 
-          if (orderDoc.exists()) {
-            orderData = orderDoc.data();
-
-            // MERGED 주문은 리스트에서 제외
-            if (orderData.status === "MERGED") return null;
-          }
+          // MERGED / COMPLETED 상태는 방문수령 대기 목록에서 제외
+          if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") return null;
+          if (orderStatus === "COMPLETED" || orderStatus === "MERGED") return null;
+          if (orderData?.isCompleted === true) return null;
+          if (shipmentData?.isCompleted === true) return null;
+          if (orderData?.pickupReady === false) return null;
+          if (shipmentData?.pickupReady === false) return null;
 
           return {
             id: orderRef.id,
-            ...data,
+            ...shipmentData,
             ...orderData
           };
         })
@@ -291,7 +298,15 @@ const Outbound: React.FC = () => {
         }
       });
 
-      setPendingOrders(Array.from(uniqueMap.values()));
+      const cleanedOrders = Array.from(uniqueMap.values()).filter((order: any) => {
+        const status = String(order?.status || "").trim().toUpperCase();
+        if (status === "COMPLETED" || status === "MERGED") return false;
+        if (order?.isCompleted === true) return false;
+        if (order?.pickupReady === false) return false;
+        return true;
+      });
+
+      setPendingOrders(cleanedOrders);
     } catch (err) {
       console.error("방문수령 주문 로딩 실패:", err);
     }
@@ -303,18 +318,24 @@ const Outbound: React.FC = () => {
   };
 
   const handleProductScan = (sku: string) => {
-    // Find the first item with this SKU that still needs to be scanned
-    const idx = itemsState.findIndex(i => i.sku === sku && i.scannedQty < i.requiredQty);
+    const normalizedSku = String(sku || "")
+      .trim()
+      .toUpperCase();
+
+    const idx = itemsState.findIndex(
+      i =>
+        String(i.sku || "").trim().toUpperCase() === normalizedSku &&
+        i.scannedQty < i.requiredQty
+    );
+
     if (idx !== -1) {
       const newItems = [...itemsState];
       if (newItems[idx].scannedQty < newItems[idx].requiredQty) {
         newItems[idx].scannedQty += 1;
         setItemsState(newItems);
-        // Play success sound (conceptually)
       }
     } else {
-      // Handle wrong item scan or all already scanned
-      setErrorMsg(`SKU ${sku} 는 주문에 없거나 이미 모든 수량을 스캔했습니다.`);
+      setErrorMsg(`SKU ${normalizedSku} 는 주문에 없거나 이미 모든 수량을 스캔했습니다.`);
       setTimeout(() => setErrorMsg(null), 3000);
     }
   };
@@ -360,14 +381,38 @@ const Outbound: React.FC = () => {
   const handleFinalize = async () => {
     if (!activeOrder || !isOrderComplete) return;
 
+    const finalizedItems = itemsState.map(i => ({
+      sku: String(i.sku || "").trim().toUpperCase(),
+      qty: Number(i.scannedQty || 0),
+      name: i.name,
+      sourceOrderId: (i as any).sourceOrderId
+    }));
+
+    const invalidItem = finalizedItems.find(item => !item.sku || item.qty <= 0);
+
+    if (invalidItem) {
+      console.error("출고 payload 오류", {
+        orderId: activeOrder.id,
+        invalidItem,
+        finalizedItems
+      });
+      setErrorMsg("출고할 상품의 SKU 또는 수량이 올바르지 않습니다.");
+      return;
+    }
+
+    console.log("출고 finalize payload", {
+      orderId: activeOrder.id,
+      finalizedItems,
+      shipmentMeta: {
+        deliveryType: (activeOrder as any).deliveryType,
+        tracking: (activeOrder as any).tracking,
+        trackingNumbers: (activeOrder as any).trackingNumbers
+      }
+    });
+
     const success = await inventoryService.completeOrder(
       activeOrder.id,
-      itemsState.map(i => ({ 
-        sku: i.sku, 
-        qty: i.scannedQty,
-        name: i.name,
-        sourceOrderId: (i as any).sourceOrderId
-      })),
+      finalizedItems,
       memo,
       {
         deliveryType: (activeOrder as any).deliveryType,
@@ -380,10 +425,10 @@ const Outbound: React.FC = () => {
       setSuccessMsg(`주문 ${(activeOrder as any).tracking || trackingInput} 출고 처리가 완료되었습니다.`);
       setActiveOrder(null);
       setItemsState([]);
-      setTrackingInput(""); // 🔥 출고 완료 후 운송장 입력값 초기화
+      setTrackingInput("");
       setMemo("");
+      setSelectedPickupOrders([]);
 
-      // 🔥 배송 모드에 따라 리스트 새로고침
       if (deliveryMode === "VALEX") {
         loadValexOrders();
       } else if (deliveryMode === "PICKUP") {
@@ -659,10 +704,14 @@ const Outbound: React.FC = () => {
                           item.code ||
                           "";
 
+                        const normalizedSku = String(resolvedSku || "")
+                          .trim()
+                          .toUpperCase();
+
                         return {
-                          sku: resolvedSku,
-                          name: item.name || resolvedSku,
-                          requiredQty: item.qty,
+                          sku: normalizedSku,
+                          name: item.name || normalizedSku,
+                          requiredQty: Number(item.qty ?? item.quantity ?? 0),
                           scannedQty: 0,
                           sourceOrderId: item.sourceOrderId || order.id
                         };

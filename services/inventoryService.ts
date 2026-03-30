@@ -388,8 +388,10 @@ class InventoryService {
       }[] = [];
 
       for (const item of items) {
-        const normalizedSku = item.sku.trim().toUpperCase();
-        const qty = Number(item.qty) || 0;
+        const normalizedSku = String(item?.sku || "")
+          .trim()
+          .toUpperCase();
+        const qty = Number(item?.qty ?? 0);
 
         // 🔴 SKU가 비어있는 경우 ("" 등) → 재고 차감 시도하지 않고 미매칭 처리
         if (!normalizedSku) {
@@ -398,6 +400,17 @@ class InventoryService {
             name: item.name || "제품명 없음",
             qty,
             reason: "EMPTY_SKU"
+          });
+          continue;
+        }
+
+        // 🔴 수량이 0 이하이거나 숫자가 아니면 재고 차감하지 않고 검토 대상으로 분류
+        if (!Number.isFinite(qty) || qty <= 0) {
+          unmatchedItems.push({
+            sku: normalizedSku,
+            name: item.name || "(수량 오류 상품)",
+            qty: Number.isFinite(qty) ? qty : 0,
+            reason: "INVALID_QTY"
           });
           continue;
         }
@@ -416,9 +429,16 @@ class InventoryService {
           continue;
         }
 
+        console.log("재고 차감 실행", {
+          orderId,
+          sku: normalizedSku,
+          qty
+        });
+
         // 🔥 재고 부족이어도 막지 않고 그대로 차감 (마이너스 허용)
         await updateDoc(productRef, {
-          stock: increment(-qty)
+          stock: increment(-qty),
+          lastUpdated: serverTimestamp()
         });
       }
 
@@ -468,7 +488,7 @@ class InventoryService {
       const productNames = (
         await Promise.all(
           items.map(async (item) => {
-            const normalizedSku = (item.sku || "").trim().toUpperCase();
+            const normalizedSku = String(item?.sku || "").trim().toUpperCase();
 
             if (!normalizedSku) return "";
 
@@ -541,14 +561,15 @@ class InventoryService {
 
       const resolvedItems = await Promise.all(
         items.map(async (item, idx) => {
-          const normalizedSku = (item.sku || "").trim().toUpperCase();
+          const normalizedSku = String(item?.sku || "").trim().toUpperCase();
+          const normalizedQty = Number(item?.qty ?? 0) || 0;
 
           if (!normalizedSku) {
             return {
               sku: `UNMATCHED_${idx}`,
               originalSku: "",
               name: item.name || "",
-              quantity: item.qty,
+              quantity: normalizedQty,
               link: "",
               sourceOrderId: item.sourceOrderId || orderId
             };
@@ -562,7 +583,7 @@ class InventoryService {
               sku: `UNMATCHED_${idx}`,
               originalSku: normalizedSku,
               name: item.name || "",
-              quantity: item.qty,
+              quantity: normalizedQty,
               link: "",
               sourceOrderId: item.sourceOrderId || orderId
             };
@@ -575,7 +596,7 @@ class InventoryService {
           return {
             sku: normalizedSku,
             name: productName,
-            quantity: item.qty,
+            quantity: normalizedQty,
             link: productLink,
             sourceOrderId: item.sourceOrderId || orderId
           };
@@ -597,7 +618,7 @@ class InventoryService {
         customerPhone: resolvedPhone,
         customerPhoneLast4: this.getPhoneLast4(resolvedPhone),
         pickupCustomerKey,
-        skuList: items.map(item => item.sku.trim().toUpperCase()).filter(Boolean),
+        skuList: items.map(item => String(item?.sku || "").trim().toUpperCase()).filter(Boolean),
         productNameTokens,
         searchableText: (
           productNames +
@@ -614,13 +635,19 @@ class InventoryService {
           " " +
           trackingNumbers.join(" ") +
           " " +
-          items.map(item => item.sku).join(" ")
+          items.map(item => String(item?.sku || "")).join(" ")
         ).toLowerCase(),
         trackingNumber: trackingNumbers.join(","),
         trackingNumbers,
         memo: memo || "",
         needsReview: unmatchedItems.length > 0,
         unmatchedItems: unmatchedItems,
+        requestedItems: items.map(item => ({
+          sku: String(item?.sku || "").trim().toUpperCase(),
+          qty: Number(item?.qty ?? 0) || 0,
+          name: item?.name || "",
+          sourceOrderId: item?.sourceOrderId || orderId
+        })),
         createdAt: serverTimestamp(),
         items: resolvedItems
       });
