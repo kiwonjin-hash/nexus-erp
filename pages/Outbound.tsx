@@ -176,13 +176,24 @@ const Outbound: React.FC = () => {
       const shipmentData: any = docSnap.data();
       const orderRef = docSnap.ref.parent.parent;
       const orderId = orderRef ? orderRef.id : "";
+      const orderDoc = orderRef ? await getDoc(orderRef) : null;
+      const parentOrderData: any = orderDoc && orderDoc.exists() ? orderDoc.data() : {};
+
+      const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+      const parentOrderStatus = String(parentOrderData?.status || "").trim().toUpperCase();
 
       const orderData = {
         id: orderId,
-        ...shipmentData
+        ...shipmentData,
+        ...parentOrderData
       } as Order;
 
-      if (orderData.status === "COMPLETED") {
+      if (
+        shipmentStatus === "COMPLETED" ||
+        parentOrderStatus === "COMPLETED" ||
+        shipmentData?.isCompleted === true ||
+        parentOrderData?.isCompleted === true
+      ) {
         setErrorMsg("이미 출고 완료된 주문입니다.");
         setActiveOrder(null);
         return;
@@ -229,23 +240,48 @@ const Outbound: React.FC = () => {
 
       const snapshot = await getDocs(q);
 
-      const valexMap = new Map<string, any>();
+      const valexOrders = await Promise.all(
+        snapshot.docs.map(async (docSnap) => {
+          const shipmentData: any = docSnap.data();
+          const orderRef = docSnap.ref.parent.parent;
 
-      snapshot.docs.forEach(docSnap => {
-        const data: any = docSnap.data();
-        const orderRef = docSnap.ref.parent.parent;
-        const orderId = orderRef ? orderRef.id : null;
-        if (!orderId) return;
+          if (!orderRef) return null;
 
-        if (!valexMap.has(orderId)) {
-          valexMap.set(orderId, {
-            id: orderId,
-            ...data
-          });
+          const orderDoc = await getDoc(orderRef);
+          const orderData: any = orderDoc.exists() ? orderDoc.data() : {};
+
+          const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+          const orderStatus = String(orderData?.status || "").trim().toUpperCase();
+
+          if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") return null;
+          if (orderStatus === "COMPLETED" || orderStatus === "MERGED") return null;
+          if (orderData?.isCompleted === true) return null;
+          if (shipmentData?.isCompleted === true) return null;
+
+          return {
+            id: orderRef.id,
+            ...shipmentData,
+            ...orderData
+          };
+        })
+      );
+
+      const uniqueMap = new Map<string, any>();
+
+      valexOrders.filter(Boolean).forEach((order: any) => {
+        if (!uniqueMap.has(order.id)) {
+          uniqueMap.set(order.id, order);
         }
       });
 
-      setPendingOrders(Array.from(valexMap.values()));
+      const cleanedOrders = Array.from(uniqueMap.values()).filter((order: any) => {
+        const status = String(order?.status || "").trim().toUpperCase();
+        if (status === "COMPLETED" || status === "MERGED") return false;
+        if (order?.isCompleted === true) return false;
+        return true;
+      });
+
+      setPendingOrders(cleanedOrders);
     } catch (err) {
       console.error("발렉스 주문 로딩 실패:", err);
     }
@@ -479,6 +515,9 @@ const Outbound: React.FC = () => {
             setActiveOrder(null);
             setItemsState([]);
             setPendingOrders([]);
+            setSelectedPickupOrders([]);
+            setOrderSearch("");
+            setCurrentPage(1);
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${
             deliveryMode === "NORMAL"
@@ -494,6 +533,9 @@ const Outbound: React.FC = () => {
             setDeliveryMode("VALEX");
             setActiveOrder(null);
             setItemsState([]);
+            setSelectedPickupOrders([]);
+            setOrderSearch("");
+            setCurrentPage(1);
             loadValexOrders();
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${
@@ -510,6 +552,9 @@ const Outbound: React.FC = () => {
             setDeliveryMode("PICKUP");
             setActiveOrder(null);
             setItemsState([]);
+            setSelectedPickupOrders([]);
+            setOrderSearch("");
+            setCurrentPage(1);
             loadPickupOrders();
           }}
           className={`px-4 py-2 rounded-lg text-sm font-medium ${

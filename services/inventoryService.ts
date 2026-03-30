@@ -673,36 +673,82 @@ class InventoryService {
         }
       }
 
-      // 🔹 현재 outbound에서 선택된 shipment만 완료 처리
+      // 🔹 출고 완료 시 같은 주문 아래 READY 상태 shipment들을 함께 정리
       const batch = writeBatch(db);
 
+      const normalizedTrackingNumbers = [
+        ...new Set(
+          trackingNumbers
+            .map((value) => this.normalizeTrackingNumber(String(value || "")))
+            .filter(Boolean)
+        )
+      ];
+
+      const shipmentDocsToComplete = new Map<string, any>();
+
+      shipmentsSnap.docs.forEach((shipmentDoc) => {
+        const shipmentData: any = shipmentDoc.data() || {};
+        const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+
+        if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") {
+          return;
+        }
+
+        const shipmentTrackingNumbers = [
+          ...new Set([
+            ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumbers),
+            ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumber),
+            ...this.extractTrackingNumbersFromValue(shipmentData?.tracking)
+          ])
+        ];
+
+        const hasMatchedTracking =
+          normalizedTrackingNumbers.length === 0 ||
+          shipmentTrackingNumbers.some((value) => normalizedTrackingNumbers.includes(value));
+
+        const sameDeliveryType =
+          !deliveryType ||
+          shipmentData?.deliveryType === deliveryType ||
+          shipmentData?.type === deliveryType;
+
+        if (hasMatchedTracking || sameDeliveryType) {
+          shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
+        }
+      });
+
       if (matchedShipmentEntry?.doc?.ref) {
+        shipmentDocsToComplete.set(matchedShipmentEntry.doc.ref.path, matchedShipmentEntry.doc);
+      }
+
+      if (shipmentDocsToComplete.size === 0) {
+        shipmentsSnap.docs.forEach((shipmentDoc) => {
+          const shipmentData: any = shipmentDoc.data() || {};
+          const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+
+          if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") {
+            return;
+          }
+
+          shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
+        });
+      }
+
+      shipmentDocsToComplete.forEach((shipmentDoc: any) => {
         batch.set(
-          matchedShipmentEntry.doc.ref,
+          shipmentDoc.ref,
           {
             status: "COMPLETED",
             deliveryType,
             tracking: trackingNumber,
             trackingNumbers,
-            completedAt: serverTimestamp()
+            completedAt: serverTimestamp(),
+            isCompleted: true,
+            pickupReady: false,
+            updatedAt: serverTimestamp()
           },
           { merge: true }
         );
-      }
-
-      // 매칭된 shipment가 없을 때만 전체 shipment 상태를 최소한으로 완료 처리
-      if (!matchedShipmentEntry?.doc?.ref) {
-        shipmentsSnap.docs.forEach((shipmentDoc) => {
-          batch.set(
-            shipmentDoc.ref,
-            {
-              status: "COMPLETED",
-              completedAt: serverTimestamp()
-            },
-            { merge: true }
-          );
-        });
-      }
+      });
 
       // 주문 상태도 완료로 변경
       batch.set(
@@ -712,10 +758,22 @@ class InventoryService {
           deliveryType,
           tracking: trackingNumber,
           trackingNumbers,
-          completedAt: serverTimestamp()
+          completedAt: serverTimestamp(),
+          isCompleted: true,
+          pickupReady: false,
+          updatedAt: serverTimestamp()
         },
         { merge: true }
       );
+
+      console.log("출고 완료 상태 반영", {
+        orderId,
+        deliveryType,
+        trackingNumber,
+        trackingNumbers,
+        completedShipmentCount: shipmentDocsToComplete.size,
+        completedShipmentPaths: Array.from(shipmentDocsToComplete.keys())
+      });
 
       await batch.commit();
 
