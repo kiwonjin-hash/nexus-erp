@@ -549,6 +549,7 @@ class InventoryService {
       const mergedOrderIds = Array.isArray(orderData.mergedOrderIds)
         ? orderData.mergedOrderIds.map((id: any) => String(id || "").trim()).filter(Boolean)
         : [];
+      const mergedInto = String(orderData.mergedInto || "").trim();
 
       const pickupDisplayCustomerName = this.stripPickupDisplaySuffix(
         resolvedCustomerName
@@ -654,20 +655,38 @@ class InventoryService {
 
       if (deliveryType === "PICKUP") {
         try {
-          const pickupCode = this.formatPickupCode(
-            pickupDisplayCustomerName,
-            resolvedPhone,
-            new Date()
-          );
-          const pickupItemsText = this.formatPickupItemsText(resolvedItems);
+          const isMergedSecondaryOrder = Boolean(mergedInto);
+          const shouldUseMergedItems = mergedOrderIds.length > 1;
 
-          await this.syncPickupToSheet({
-            orderId,
-            customerName: pickupDisplayCustomerName,
-            phone: resolvedPhone,
-            itemsText: pickupItemsText,
-            pickupCode
-          });
+          if (isMergedSecondaryOrder) {
+            console.log("merged pickup secondary order sheet sync skipped", {
+              orderId,
+              mergedInto
+            });
+          } else {
+            const pickupSyncItems = shouldUseMergedItems && Array.isArray(orderData.items)
+              ? orderData.items.map((item: any) => ({
+                  sku: String(item?.sku || "").trim().toUpperCase(),
+                  name: item?.name || "",
+                  quantity: Number(item?.quantity ?? item?.qty ?? 0) || 0
+                }))
+              : resolvedItems;
+
+            const pickupCode = this.formatPickupCode(
+              pickupDisplayCustomerName,
+              resolvedPhone,
+              new Date()
+            );
+            const pickupItemsText = this.formatPickupItemsText(pickupSyncItems);
+
+            await this.syncPickupToSheet({
+              orderId,
+              customerName: pickupDisplayCustomerName,
+              phone: resolvedPhone,
+              itemsText: pickupItemsText,
+              pickupCode
+            });
+          }
         } catch (pickupSyncError) {
           console.error("방문수령 시트 동기화 실패:", pickupSyncError);
         }
