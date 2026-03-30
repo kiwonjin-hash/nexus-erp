@@ -785,6 +785,32 @@ class InventoryService {
         { merge: true }
       );
 
+      // 병합 주문이면 대표 주문 완료 시 하위 주문들도 함께 완료 처리
+      if (mergedOrderIds.length > 1) {
+        mergedOrderIds.forEach((mergedId) => {
+          const normalizedMergedId = String(mergedId || "").trim();
+
+          if (!normalizedMergedId || normalizedMergedId === orderId) return;
+
+          const mergedOrderRef = doc(db, "orders", normalizedMergedId);
+          batch.set(
+            mergedOrderRef,
+            {
+              status: "COMPLETED",
+              mergedInto: orderId,
+              deliveryType,
+              tracking: trackingNumber,
+              trackingNumbers,
+              completedAt: serverTimestamp(),
+              isCompleted: true,
+              pickupReady: false,
+              updatedAt: serverTimestamp()
+            },
+            { merge: true }
+          );
+        });
+      }
+
       console.log("출고 완료 상태 반영", {
         orderId,
         deliveryType,
@@ -1608,6 +1634,8 @@ class InventoryService {
           batch.set(orderRef, {
             status: "MERGED",
             mergedInto: primaryOrderId,
+            isCompleted: false,
+            pickupReady: false,
             updatedAt: serverTimestamp()
           }, { merge: true });
         }
@@ -1634,6 +1662,9 @@ class InventoryService {
         total_price: mergedTotalPrice,
         status: "READY",
         mergedOrderIds: orderIds,
+        mergedInto: null,
+        isCompleted: false,
+        pickupReady: true,
         pickupCustomerKey: this.buildPickupCustomerKey(primaryName, primaryPhone),
         updatedAt: serverTimestamp()
       }, { merge: true });
@@ -1716,7 +1747,11 @@ class InventoryService {
             ...shipmentData,
             items: orderItems,
             total_price: restoredTotalPrice,
-            restoredAt: serverTimestamp()
+            status: "READY",
+            isCompleted: false,
+            pickupReady: true,
+            restoredAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
           };
 
           batch.set(newShipmentRef, restoredShipmentData);
@@ -1751,6 +1786,9 @@ class InventoryService {
           {
             status: "READY",
             mergedInto: null,
+            mergedOrderIds: [],
+            isCompleted: false,
+            pickupReady: true,
             items: restoredSummary.items,
             total_price: restoredSummary.total_price,
             updatedAt: serverTimestamp()
@@ -1768,13 +1806,23 @@ class InventoryService {
       batch.set(
         primaryRef,
         {
+          status: "READY",
+          mergedInto: null,
           mergedOrderIds: [],
+          isCompleted: false,
+          pickupReady: true,
           items: primarySummary.items,
           total_price: primarySummary.total_price,
           updatedAt: serverTimestamp()
         },
         { merge: true }
       );
+
+      console.log("방문수령 병합 취소 복구", {
+        primaryOrderId,
+        mergedOrderIds,
+        restoredOrderIds: Object.keys(restoredOrderSummaries)
+      });
 
       await batch.commit();
 

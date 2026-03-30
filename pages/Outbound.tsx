@@ -190,9 +190,14 @@ const Outbound: React.FC = () => {
 
       if (
         shipmentStatus === "COMPLETED" ||
+        shipmentStatus === "MERGED" ||
         parentOrderStatus === "COMPLETED" ||
+        parentOrderStatus === "MERGED" ||
         shipmentData?.isCompleted === true ||
-        parentOrderData?.isCompleted === true
+        parentOrderData?.isCompleted === true ||
+        shipmentData?.pickupReady === false ||
+        parentOrderData?.pickupReady === false ||
+        Boolean(parentOrderData?.mergedInto)
       ) {
         setErrorMsg("이미 출고 완료된 주문입니다.");
         setActiveOrder(null);
@@ -252,11 +257,13 @@ const Outbound: React.FC = () => {
 
           const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
           const orderStatus = String(orderData?.status || "").trim().toUpperCase();
+          const mergedInto = String(orderData?.mergedInto || shipmentData?.mergedInto || "").trim();
 
           if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") return null;
           if (orderStatus === "COMPLETED" || orderStatus === "MERGED") return null;
           if (orderData?.isCompleted === true) return null;
           if (shipmentData?.isCompleted === true) return null;
+          if (mergedInto) return null;
 
           return {
             id: orderRef.id,
@@ -276,8 +283,10 @@ const Outbound: React.FC = () => {
 
       const cleanedOrders = Array.from(uniqueMap.values()).filter((order: any) => {
         const status = String(order?.status || "").trim().toUpperCase();
+        const mergedInto = String(order?.mergedInto || "").trim();
         if (status === "COMPLETED" || status === "MERGED") return false;
         if (order?.isCompleted === true) return false;
+        if (mergedInto) return false;
         return true;
       });
 
@@ -309,6 +318,7 @@ const Outbound: React.FC = () => {
 
           const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
           const orderStatus = String(orderData?.status || "").trim().toUpperCase();
+          const mergedInto = String(orderData?.mergedInto || shipmentData?.mergedInto || "").trim();
 
           // MERGED / COMPLETED 상태는 방문수령 대기 목록에서 제외
           if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") return null;
@@ -317,6 +327,7 @@ const Outbound: React.FC = () => {
           if (shipmentData?.isCompleted === true) return null;
           if (orderData?.pickupReady === false) return null;
           if (shipmentData?.pickupReady === false) return null;
+          if (mergedInto) return null;
 
           return {
             id: orderRef.id,
@@ -336,9 +347,11 @@ const Outbound: React.FC = () => {
 
       const cleanedOrders = Array.from(uniqueMap.values()).filter((order: any) => {
         const status = String(order?.status || "").trim().toUpperCase();
+        const mergedInto = String(order?.mergedInto || "").trim();
         if (status === "COMPLETED" || status === "MERGED") return false;
         if (order?.isCompleted === true) return false;
         if (order?.pickupReady === false) return false;
+        if (mergedInto) return false;
         return true;
       });
 
@@ -968,6 +981,10 @@ const Outbound: React.FC = () => {
                       if (success) {
                         alert("병합이 취소되었습니다.");
                         setActiveOrder(null);
+                        setItemsState([]);
+                        setTrackingInput("");
+                        setMemo("");
+                        setSelectedPickupOrders([]);
                         loadPickupOrders();
                       } else {
                         alert("병합 취소 실패");
