@@ -704,43 +704,20 @@ class InventoryService {
       ];
 
       const shipmentDocsToComplete = new Map<string, any>();
+      const orderIdsToSweep = [
+        ...new Set(
+          [orderId, ...mergedOrderIds]
+            .map((value) => String(value || "").trim())
+            .filter(Boolean)
+        )
+      ];
 
-      shipmentsSnap.docs.forEach((shipmentDoc) => {
-        const shipmentData: any = shipmentDoc.data() || {};
-        const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+      for (const targetOrderId of orderIdsToSweep) {
+        const targetShipmentsSnap = targetOrderId === orderId
+          ? shipmentsSnap
+          : await getDocs(collection(db, "orders", targetOrderId, "shipments"));
 
-        if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") {
-          return;
-        }
-
-        const shipmentTrackingNumbers = [
-          ...new Set([
-            ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumbers),
-            ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumber),
-            ...this.extractTrackingNumbersFromValue(shipmentData?.tracking)
-          ])
-        ];
-
-        const hasMatchedTracking =
-          normalizedTrackingNumbers.length === 0 ||
-          shipmentTrackingNumbers.some((value) => normalizedTrackingNumbers.includes(value));
-
-        const sameDeliveryType =
-          !deliveryType ||
-          shipmentData?.deliveryType === deliveryType ||
-          shipmentData?.type === deliveryType;
-
-        if (hasMatchedTracking || sameDeliveryType) {
-          shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
-        }
-      });
-
-      if (matchedShipmentEntry?.doc?.ref) {
-        shipmentDocsToComplete.set(matchedShipmentEntry.doc.ref.path, matchedShipmentEntry.doc);
-      }
-
-      if (shipmentDocsToComplete.size === 0) {
-        shipmentsSnap.docs.forEach((shipmentDoc) => {
+        targetShipmentsSnap.docs.forEach((shipmentDoc) => {
           const shipmentData: any = shipmentDoc.data() || {};
           const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
 
@@ -748,8 +725,50 @@ class InventoryService {
             return;
           }
 
-          shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
+          const shipmentTrackingNumbers = [
+            ...new Set([
+              ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumbers),
+              ...this.extractTrackingNumbersFromValue(shipmentData?.trackingNumber),
+              ...this.extractTrackingNumbersFromValue(shipmentData?.tracking)
+            ])
+          ];
+
+          const hasMatchedTracking =
+            normalizedTrackingNumbers.length === 0 ||
+            shipmentTrackingNumbers.some((value) => normalizedTrackingNumbers.includes(value));
+
+          const sameDeliveryType =
+            !deliveryType ||
+            shipmentData?.deliveryType === deliveryType ||
+            shipmentData?.type === deliveryType;
+
+          if (hasMatchedTracking || sameDeliveryType) {
+            shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
+          }
         });
+      }
+
+      if (matchedShipmentEntry?.doc?.ref) {
+        shipmentDocsToComplete.set(matchedShipmentEntry.doc.ref.path, matchedShipmentEntry.doc);
+      }
+
+      if (shipmentDocsToComplete.size === 0) {
+        for (const targetOrderId of orderIdsToSweep) {
+          const targetShipmentsSnap = targetOrderId === orderId
+            ? shipmentsSnap
+            : await getDocs(collection(db, "orders", targetOrderId, "shipments"));
+
+          targetShipmentsSnap.docs.forEach((shipmentDoc) => {
+            const shipmentData: any = shipmentDoc.data() || {};
+            const shipmentStatus = String(shipmentData?.status || "").trim().toUpperCase();
+
+            if (shipmentStatus === "COMPLETED" || shipmentStatus === "MERGED") {
+              return;
+            }
+
+            shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
+          });
+        }
       }
 
       shipmentDocsToComplete.forEach((shipmentDoc: any) => {
@@ -813,6 +832,7 @@ class InventoryService {
 
       console.log("출고 완료 상태 반영", {
         orderId,
+        mergedOrderIds,
         deliveryType,
         trackingNumber,
         trackingNumbers,
@@ -1702,6 +1722,20 @@ class InventoryService {
         collection(db, "orders", primaryOrderId, "shipments")
       );
 
+      // 🔹 병합 취소 전, 병합 대상 주문들에 이미 남아 있는 shipment들을 먼저 정리
+      //     이전 병합/복원 이력이 있으면 기존 shipment가 남아 있어 중복 복구될 수 있음
+      for (const orderId of mergedOrderIds) {
+        if (!orderId || orderId === primaryOrderId) continue;
+
+        const existingShipmentsSnap = await getDocs(
+          collection(db, "orders", orderId, "shipments")
+        );
+
+        existingShipmentsSnap.docs.forEach((existingShipmentDoc) => {
+          batch.delete(existingShipmentDoc.ref);
+        });
+      }
+
       const restoredOrderSummaries: Record<
         string,
         {
@@ -1720,13 +1754,30 @@ class InventoryService {
 
         // sourceOrderId 기준으로 분리
         const itemsByOrder: Record<string, any[]> = {};
+        const seenItemKeysByOrder: Record<string, Set<string>> = {};
 
         items.forEach((item: any) => {
           // if sourceOrderId is missing (older merged data), treat it as the shipment's original order
-          const source = item.sourceOrderId ?? primaryOrderId;
+          const source = String(item?.sourceOrderId ?? primaryOrderId).trim() || primaryOrderId;
           if (!itemsByOrder[source]) itemsByOrder[source] = [];
+          if (!seenItemKeysByOrder[source]) seenItemKeysByOrder[source] = new Set<string>();
+
           // Remove sourceOrderId field instead of setting undefined (Firestore does not allow undefined)
           const { sourceOrderId, ...rest } = item;
+
+          const dedupeKey = [
+            String(rest?.sku || "").trim().toUpperCase(),
+            String(rest?.name || "").trim(),
+            Number(rest?.quantity ?? rest?.qty ?? 0),
+            Number(rest?.subtotal ?? 0),
+            Number(rest?.unit_price ?? 0)
+          ].join("|");
+
+          if (seenItemKeysByOrder[source].has(dedupeKey)) {
+            return;
+          }
+
+          seenItemKeysByOrder[source].add(dedupeKey);
           itemsByOrder[source].push(rest);
         });
 
@@ -1737,6 +1788,10 @@ class InventoryService {
             (sum, i) => sum + Number(i.subtotal || 0),
             0
           );
+
+          if (!orderItems || orderItems.length === 0) {
+            continue;
+          }
 
           const newShipmentRef = doc(
             collection(db, "orders", orderId, "shipments")
@@ -1763,7 +1818,33 @@ class InventoryService {
             };
           }
 
-          restoredOrderSummaries[orderId].items.push(...orderItems);
+          const existingSummaryKeys = new Set(
+            restoredOrderSummaries[orderId].items.map((existingItem: any) => [
+              String(existingItem?.sku || "").trim().toUpperCase(),
+              String(existingItem?.name || "").trim(),
+              Number(existingItem?.quantity ?? existingItem?.qty ?? 0),
+              Number(existingItem?.subtotal ?? 0),
+              Number(existingItem?.unit_price ?? 0)
+            ].join("|"))
+          );
+
+          orderItems.forEach((orderItem: any) => {
+            const summaryKey = [
+              String(orderItem?.sku || "").trim().toUpperCase(),
+              String(orderItem?.name || "").trim(),
+              Number(orderItem?.quantity ?? orderItem?.qty ?? 0),
+              Number(orderItem?.subtotal ?? 0),
+              Number(orderItem?.unit_price ?? 0)
+            ].join("|");
+
+            if (existingSummaryKeys.has(summaryKey)) {
+              return;
+            }
+
+            existingSummaryKeys.add(summaryKey);
+            restoredOrderSummaries[orderId].items.push(orderItem);
+          });
+
           restoredOrderSummaries[orderId].total_price += restoredTotalPrice;
         }
 
@@ -1821,7 +1902,8 @@ class InventoryService {
       console.log("방문수령 병합 취소 복구", {
         primaryOrderId,
         mergedOrderIds,
-        restoredOrderIds: Object.keys(restoredOrderSummaries)
+        restoredOrderIds: Object.keys(restoredOrderSummaries),
+        primaryShipmentCountBeforeRestore: shipmentsSnap.size
       });
 
       await batch.commit();
