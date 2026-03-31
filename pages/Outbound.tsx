@@ -430,14 +430,20 @@ const Outbound: React.FC = () => {
   const handleFinalize = async () => {
     if (!activeOrder || !isOrderComplete) return;
 
-    const finalizedItems = itemsState.map(i => ({
-      sku: String(i.sku || "").trim().toUpperCase(),
-      qty: Number(i.scannedQty || 0),
-      name: i.name,
-      sourceOrderId: (i as any).sourceOrderId
-    }));
+    const finalizedItems = itemsState.map((i, index) => {
+      const normalizedSku = String(i.sku || "").trim().toUpperCase();
+      const fallbackSku = `NO-SKU-${activeOrder.id}-${index + 1}`;
 
-    const invalidItem = finalizedItems.find(item => !item.sku || item.qty <= 0);
+      return {
+        sku: normalizedSku || fallbackSku,
+        originalSku: normalizedSku,
+        qty: Number(i.scannedQty || 0),
+        name: i.name,
+        sourceOrderId: (i as any).sourceOrderId
+      };
+    });
+
+    const invalidItem = finalizedItems.find(item => item.qty <= 0);
 
     if (invalidItem) {
       console.error("출고 payload 오류", {
@@ -445,7 +451,7 @@ const Outbound: React.FC = () => {
         invalidItem,
         finalizedItems
       });
-      setErrorMsg("출고할 상품의 SKU 또는 수량이 올바르지 않습니다.");
+      setErrorMsg("출고할 상품 수량이 올바르지 않습니다.");
       return;
     }
 
