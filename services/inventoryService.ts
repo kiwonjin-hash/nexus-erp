@@ -1619,12 +1619,40 @@ class InventoryService {
           const shipmentItems = shipmentData.items || [];
 
           // Add sourceOrderId to each item, keep context
+          // For primary order's shipments, preserve existing sourceOrderId (items may have been
+          // moved from secondary orders in a previous merge — overwriting would cause duplicates
+          // under the wrong order number when re-merging).
           const itemsWithSource = shipmentItems.map((item: any) => ({
             ...item,
-            sourceOrderId: orderId
+            sourceOrderId: item.sourceOrderId || orderId
           }));
 
-          mergedItems = [...mergedItems, ...itemsWithSource];
+          // Deduplicate: skip items that are already in mergedItems with the same
+          // sourceOrderId + sku + name + quantity to guard against corrupted data
+          // (e.g. a shipment whose items were accidentally duplicated in a previous merge).
+          const existingKeys = new Set(
+            mergedItems.map((i: any) =>
+              [
+                String(i.sourceOrderId || ""),
+                String(i.sku || "").toUpperCase(),
+                String(i.name || ""),
+                Number(i.quantity ?? i.qty ?? 0)
+              ].join("|")
+            )
+          );
+          const deduped = itemsWithSource.filter((item: any) => {
+            const key = [
+              String(item.sourceOrderId || ""),
+              String(item.sku || "").toUpperCase(),
+              String(item.name || ""),
+              Number(item.quantity ?? item.qty ?? 0)
+            ].join("|");
+            if (existingKeys.has(key)) return false;
+            existingKeys.add(key);
+            return true;
+          });
+
+          mergedItems = [...mergedItems, ...deduped];
 
           mergedTotalPrice += Number(shipmentData.total_price || 0);
 
@@ -1662,6 +1690,14 @@ class InventoryService {
       }
 
       const primaryOrderData = primarySnap.exists() ? (primarySnap.data() as any) || {} : {};
+
+      // Preserve any order IDs that were merged in a previous call but are not in the current
+      // orderIds list (e.g. re-merging A+C when A was already merged with B — B must not be lost).
+      const existingMergedOrderIds: string[] = Array.isArray(primaryOrderData.mergedOrderIds)
+        ? primaryOrderData.mergedOrderIds
+        : [];
+      const allMergedOrderIds = [...new Set([...existingMergedOrderIds, ...orderIds])];
+
       const primaryPhone =
         primaryOrderData.phone ||
         primaryOrderData.customerPhone ||
@@ -1681,7 +1717,7 @@ class InventoryService {
         items: mergedItems,
         total_price: mergedTotalPrice,
         status: "READY",
-        mergedOrderIds: orderIds,
+        mergedOrderIds: allMergedOrderIds,
         mergedInto: null,
         isCompleted: false,
         pickupReady: true,
