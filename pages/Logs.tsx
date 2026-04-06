@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { inventoryService } from "../services/inventoryService";
-(window as any).inventoryService = inventoryService;
 import { FileText, Camera } from "lucide-react";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
