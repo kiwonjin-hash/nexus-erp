@@ -248,9 +248,10 @@ const Outbound: React.FC = () => {
       const parentOrderStatus = String(parentOrderData?.status || "").trim().toUpperCase();
 
       const orderData = {
-        id: orderId,
+        ...parentOrderData,
         ...shipmentData,
-        ...parentOrderData
+        id: orderId,
+        items: shipmentData?.items?.length > 0 ? shipmentData.items : parentOrderData?.items
       } as Order;
 
       // 분리배송: shipment 자체가 READY면 부모 order 완료 여부 무시
