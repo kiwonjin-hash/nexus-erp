@@ -1,5 +1,5 @@
 import { inventoryService } from "../services/inventoryService";
-import { doc, getDoc, collection, collectionGroup, query, where, getDocs } from "firebase/firestore";
+import { doc, getDoc, collection, collectionGroup, query, where, getDocs, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 import React, { useState, useRef, useEffect } from 'react';
 import { Order, OrderItem } from '../types';
@@ -65,6 +65,13 @@ const Outbound: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+
+  // 분리배송 등록 상태
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [splitOrderInput, setSplitOrderInput] = useState('');
+  const [splitOrderData, setSplitOrderData] = useState<any>(null);
+  const [splitSelectedItems, setSplitSelectedItems] = useState<number[]>([]);
+  const [splitLoading, setSplitLoading] = useState(false);
   const [memo, setMemo] = useState('');
 
   const [deliveryMode, setDeliveryMode] = useState<"NORMAL" | "VALEX" | "PICKUP">("NORMAL");
@@ -225,8 +232,9 @@ const Outbound: React.FC = () => {
       }
 
       if (!docSnap) {
-        setErrorMsg("주문 정보를 찾을 수 없습니다.");
+        setErrorMsg("주문 정보를 찾을 수 없습니다. 분리배송이라면 아래 버튼으로 등록하세요.");
         setActiveOrder(null);
+        setShowSplitModal(true);
         return;
       }
 
@@ -245,13 +253,16 @@ const Outbound: React.FC = () => {
         ...parentOrderData
       } as Order;
 
+      // 분리배송: shipment 자체가 READY면 부모 order 완료 여부 무시
+      const isShipmentReady = shipmentStatus === "READY";
+
       if (
         shipmentStatus === "COMPLETED" ||
         shipmentStatus === "MERGED" ||
-        parentOrderStatus === "COMPLETED" ||
-        parentOrderStatus === "MERGED" ||
+        (!isShipmentReady && parentOrderStatus === "COMPLETED") ||
+        (!isShipmentReady && parentOrderStatus === "MERGED") ||
         shipmentData?.isCompleted === true ||
-        parentOrderData?.isCompleted === true ||
+        (!isShipmentReady && parentOrderData?.isCompleted === true) ||
         shipmentData?.pickupReady === false ||
         parentOrderData?.pickupReady === false ||
         Boolean(parentOrderData?.mergedInto)
@@ -421,6 +432,79 @@ const Outbound: React.FC = () => {
   const handleTrackingSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     await processTrackingSearch(trackingInput);
+  };
+
+  // 분리배송: 주문번호로 주문 조회
+  const fetchOrderForSplit = async () => {
+    const orderNo = splitOrderInput.trim();
+    if (!orderNo) return;
+    setSplitLoading(true);
+    try {
+      const snap = await getDocs(
+        query(collection(db, "orders"), where("order_no", "==", orderNo))
+      );
+      if (snap.empty) {
+        alert("주문번호를 찾을 수 없습니다.");
+        setSplitOrderData(null);
+        return;
+      }
+      const orderDoc = snap.docs[0];
+      setSplitOrderData({ id: orderDoc.id, ...orderDoc.data() });
+      setSplitSelectedItems(
+        (orderDoc.data().items || []).map((_: any, i: number) => i)
+      );
+    } catch (e) {
+      alert("조회 중 오류 발생");
+    } finally {
+      setSplitLoading(false);
+    }
+  };
+
+  // 분리배송: READY shipment 생성
+  const createSplitShipment = async () => {
+    if (!splitOrderData || splitSelectedItems.length === 0) return;
+    const trackingNo = parseTrackingNumbers(trackingInput)[0] || trackingInput.replace(/\D/g, "").trim();
+    if (!trackingNo) {
+      alert("송장번호가 없습니다. 먼저 송장번호를 입력하세요.");
+      return;
+    }
+    setSplitLoading(true);
+    try {
+      const deliveryTypeFilter = deliveryMode === "NORMAL" ? "POST" : deliveryMode;
+      const shipmentId = `${splitOrderData.id}_${trackingNo}`;
+      const shipmentRef = doc(db, "orders", splitOrderData.id, "shipments", shipmentId);
+      const selectedItemsData = splitSelectedItems.map((i: number) => splitOrderData.items[i]);
+
+      await setDoc(shipmentRef, {
+        shipmentId,
+        tracking: trackingNo,
+        trackingNumbers: [trackingNo],
+        status: "READY",
+        deliveryType: deliveryTypeFilter,
+        items: selectedItemsData,
+        name: splitOrderData.name || splitOrderData.receiver || "",
+        receiver: splitOrderData.receiver || splitOrderData.name || "",
+        phone: splitOrderData.phone || "",
+        address: splitOrderData.address || "",
+        order_no: splitOrderData.order_no || splitOrderData.id,
+        pickupReady: deliveryTypeFilter === "PICKUP",
+        isCompleted: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      setShowSplitModal(false);
+      setSplitOrderData(null);
+      setSplitOrderInput('');
+      setErrorMsg(null);
+      // 생성 후 바로 검색
+      await processTrackingSearch(trackingInput);
+    } catch (e) {
+      alert("분리배송 shipment 생성 실패");
+      console.error(e);
+    } finally {
+      setSplitLoading(false);
+    }
   };
 
   const handleProductScan = (sku: string) => {
@@ -688,6 +772,65 @@ const Outbound: React.FC = () => {
             )}
             {errorMsg && <p className="text-red-500 mt-3 font-medium animate-pulse">{errorMsg}</p>}
             {successMsg && <p className="text-green-600 mt-3 font-medium flex items-center justify-center gap-2"><CheckCircle2/> {successMsg}</p>}
+
+            {/* 분리배송 등록 패널 */}
+            {showSplitModal && !activeOrder && (
+              <div className="mt-4 p-4 border-2 border-amber-300 bg-amber-50 rounded-xl text-left w-full max-w-xl mx-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-bold text-amber-800">분리배송 등록</h3>
+                  <button onClick={() => { setShowSplitModal(false); setSplitOrderData(null); setSplitOrderInput(''); }} className="text-slate-400 hover:text-slate-600 text-sm">닫기</button>
+                </div>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    type="text"
+                    value={splitOrderInput}
+                    onChange={e => setSplitOrderInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && fetchOrderForSplit()}
+                    placeholder="주문번호 입력"
+                    className="flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  <button
+                    onClick={fetchOrderForSplit}
+                    disabled={splitLoading}
+                    className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {splitLoading ? "조회중..." : "조회"}
+                  </button>
+                </div>
+
+                {splitOrderData && (
+                  <div>
+                    <p className="text-sm text-slate-600 mb-2">
+                      <span className="font-semibold">{splitOrderData.name || splitOrderData.receiver}</span> — {splitOrderData.order_no}
+                    </p>
+                    <p className="text-xs text-slate-500 mb-2">출고할 상품 선택:</p>
+                    <div className="space-y-1 mb-3 max-h-40 overflow-y-auto">
+                      {(splitOrderData.items || []).map((item: any, i: number) => (
+                        <label key={i} className="flex items-center gap-2 text-sm cursor-pointer p-1 hover:bg-amber-100 rounded">
+                          <input
+                            type="checkbox"
+                            checked={splitSelectedItems.includes(i)}
+                            onChange={e => {
+                              if (e.target.checked) setSplitSelectedItems(prev => [...prev, i]);
+                              else setSplitSelectedItems(prev => prev.filter(x => x !== i));
+                            }}
+                          />
+                          <span>{item.name}</span>
+                          <span className="text-slate-400">×{item.qty ?? item.quantity ?? 1}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      onClick={createSplitShipment}
+                      disabled={splitLoading || splitSelectedItems.length === 0}
+                      className="w-full py-2 bg-amber-500 text-white rounded-lg text-sm font-bold hover:bg-amber-600 disabled:opacity-50"
+                    >
+                      {splitLoading ? "생성중..." : `READY shipment 생성 (송장: ${parseTrackingNumbers(trackingInput)[0] || trackingInput.replace(/\D/g,"").trim()})`}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : !activeOrder && (deliveryMode === "VALEX" || deliveryMode === "PICKUP") ? (
           <div className="w-full max-w-2xl mx-auto space-y-3">
