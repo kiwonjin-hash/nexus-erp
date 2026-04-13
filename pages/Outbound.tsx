@@ -434,21 +434,45 @@ const Outbound: React.FC = () => {
     await processTrackingSearch(trackingInput);
   };
 
-  // 분리배송: 주문번호로 주문 조회
+  // 분리배송: 주문번호 또는 기존 송장번호로 주문 조회
   const fetchOrderForSplit = async () => {
-    const orderNo = splitOrderInput.trim();
-    if (!orderNo) return;
+    const input = splitOrderInput.trim();
+    if (!input) return;
     setSplitLoading(true);
     try {
-      const snap = await getDocs(
-        query(collection(db, "orders"), where("order_no", "==", orderNo))
+      let orderDoc: any = null;
+
+      // 1차: 주문번호로 검색
+      const byOrderNo = await getDocs(
+        query(collection(db, "orders"), where("order_no", "==", input))
       );
-      if (snap.empty) {
-        alert("주문번호를 찾을 수 없습니다.");
+      if (!byOrderNo.empty) {
+        orderDoc = byOrderNo.docs[0];
+      }
+
+      // 2차: 송장번호로 shipment 검색 → 부모 order 조회
+      if (!orderDoc) {
+        const normalized = input.replace(/\D/g, "");
+        const [arraySnap, legacySnap] = await Promise.all([
+          getDocs(query(collectionGroup(db, "shipments"), where("trackingNumbers", "array-contains", normalized))),
+          getDocs(query(collectionGroup(db, "shipments"), where("tracking", "==", normalized)))
+        ]);
+        const shipmentDoc = arraySnap.docs[0] || legacySnap.docs[0];
+        if (shipmentDoc) {
+          const parentRef = shipmentDoc.ref.parent.parent;
+          if (parentRef) {
+            const parentSnap = await getDoc(parentRef);
+            if (parentSnap.exists()) orderDoc = parentSnap;
+          }
+        }
+      }
+
+      if (!orderDoc) {
+        alert("주문을 찾을 수 없습니다. 주문번호 또는 기존 송장번호를 입력해주세요.");
         setSplitOrderData(null);
         return;
       }
-      const orderDoc = snap.docs[0];
+
       setSplitOrderData({ id: orderDoc.id, ...orderDoc.data() });
       setSplitSelectedItems(
         (orderDoc.data().items || []).map((_: any, i: number) => i)
@@ -786,7 +810,7 @@ const Outbound: React.FC = () => {
                     value={splitOrderInput}
                     onChange={e => setSplitOrderInput(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && fetchOrderForSplit()}
-                    placeholder="주문번호 입력"
+                    placeholder="주문번호 또는 기존 송장번호 입력"
                     className="flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                   <button
