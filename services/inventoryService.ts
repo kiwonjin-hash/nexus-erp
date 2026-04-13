@@ -733,16 +733,12 @@ class InventoryService {
             ])
           ];
 
+          // 분리배송 보호: 송장번호가 실제로 일치하는 shipment만 완료 처리
           const hasMatchedTracking =
-            normalizedTrackingNumbers.length === 0 ||
+            normalizedTrackingNumbers.length > 0 &&
             shipmentTrackingNumbers.some((value) => normalizedTrackingNumbers.includes(value));
 
-          const sameDeliveryType =
-            !deliveryType ||
-            shipmentData?.deliveryType === deliveryType ||
-            shipmentData?.type === deliveryType;
-
-          if (hasMatchedTracking || sameDeliveryType) {
+          if (hasMatchedTracking) {
             shipmentDocsToComplete.set(shipmentDoc.ref.path, shipmentDoc);
           }
         });
