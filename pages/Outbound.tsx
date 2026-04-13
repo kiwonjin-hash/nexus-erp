@@ -263,8 +263,6 @@ const Outbound: React.FC = () => {
         (!isShipmentReady && parentOrderStatus === "MERGED") ||
         shipmentData?.isCompleted === true ||
         (!isShipmentReady && parentOrderData?.isCompleted === true) ||
-        shipmentData?.pickupReady === false ||
-        parentOrderData?.pickupReady === false ||
         Boolean(parentOrderData?.mergedInto)
       ) {
         setErrorMsg("이미 출고 완료된 주문입니다.");
