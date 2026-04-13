@@ -50,6 +50,14 @@ const getPickupCustomerKey = (order: any) => {
   return [safeName, phoneLast4].filter(Boolean).join("_");
 };
 
+// 쉼표/줄바꿈으로 구분된 입력값에서 개별 송장번호 배열 추출
+const parseTrackingNumbers = (input: string): string[] => {
+  return input
+    .split(/[\n,]+/)
+    .map(part => part.replace(/\D/g, "").trim())
+    .filter(part => part.length >= 10);
+};
+
 const Outbound: React.FC = () => {
   const [trackingInput, setTrackingInput] = useState('');
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
@@ -123,13 +131,21 @@ const Outbound: React.FC = () => {
   }, [activeOrder]);
 
   useEffect(() => {
-    const cleaned = trackingInput.replace(/\D/g, "");
+    if (isSearching) return;
 
-    if (cleaned.length === 13 && !isSearching) {
+    const trackingNumbers = parseTrackingNumbers(trackingInput);
+
+    // 단일 13자리 송장번호 자동 검색
+    if (trackingNumbers.length === 1 && trackingNumbers[0].length === 13) {
       setIsSearching(true);
-      processTrackingSearch(cleaned).finally(() => {
-        setIsSearching(false);
-      });
+      processTrackingSearch(trackingInput).finally(() => setIsSearching(false));
+      return;
+    }
+
+    // 복수 송장번호: 모두 13자리이고 2개 이상이면 자동 검색
+    if (trackingNumbers.length >= 2 && trackingNumbers.every(t => t.length === 13)) {
+      setIsSearching(true);
+      processTrackingSearch(trackingInput).finally(() => setIsSearching(false));
     }
   }, [trackingInput]);
 
@@ -143,29 +159,63 @@ const Outbound: React.FC = () => {
         ? "POST"
         : deliveryMode; // "VALEX" or "PICKUP"
 
-    const normalizedTracking = tracking.replace(/\D/g, "").trim();
+    const trackingNumbers = parseTrackingNumbers(tracking);
+
+    if (trackingNumbers.length === 0) {
+      setErrorMsg("유효한 송장번호를 입력해주세요.");
+      setActiveOrder(null);
+      return;
+    }
 
     try {
-      const [arraySnapshot, legacySnapshot] = await Promise.all([
-        getDocs(
-          query(
-            collectionGroup(db, "shipments"),
-            where("trackingNumbers", "array-contains", normalizedTracking),
-            where("deliveryType", "==", deliveryTypeFilter),
-            where("status", "==", "READY")
-          )
-        ),
-        getDocs(
-          query(
-            collectionGroup(db, "shipments"),
-            where("tracking", "==", normalizedTracking),
-            where("deliveryType", "==", deliveryTypeFilter),
-            where("status", "==", "READY")
-          )
-        )
-      ]);
+      let docSnap: any = null;
 
-      const docSnap = arraySnapshot.docs[0] || legacySnapshot.docs[0];
+      // 각 송장번호로 순차 검색 — READY 상태 shipment 찾으면 중단
+      for (const normalizedTracking of trackingNumbers) {
+        // 1차: deliveryType 포함 검색
+        const [arraySnapshot, legacySnapshot] = await Promise.all([
+          getDocs(
+            query(
+              collectionGroup(db, "shipments"),
+              where("trackingNumbers", "array-contains", normalizedTracking),
+              where("deliveryType", "==", deliveryTypeFilter),
+              where("status", "==", "READY")
+            )
+          ),
+          getDocs(
+            query(
+              collectionGroup(db, "shipments"),
+              where("tracking", "==", normalizedTracking),
+              where("deliveryType", "==", deliveryTypeFilter),
+              where("status", "==", "READY")
+            )
+          )
+        ]);
+
+        docSnap = arraySnapshot.docs[0] || legacySnapshot.docs[0];
+        if (docSnap) break;
+
+        // 2차: deliveryType 없이 fallback 검색 (분리배송 등 deliveryType 불일치 케이스)
+        const [arrayFallback, legacyFallback] = await Promise.all([
+          getDocs(
+            query(
+              collectionGroup(db, "shipments"),
+              where("trackingNumbers", "array-contains", normalizedTracking),
+              where("status", "==", "READY")
+            )
+          ),
+          getDocs(
+            query(
+              collectionGroup(db, "shipments"),
+              where("tracking", "==", normalizedTracking),
+              where("status", "==", "READY")
+            )
+          )
+        ]);
+
+        docSnap = arrayFallback.docs[0] || legacyFallback.docs[0];
+        if (docSnap) break;
+      }
 
       if (!docSnap) {
         setErrorMsg("주문 정보를 찾을 수 없습니다.");
