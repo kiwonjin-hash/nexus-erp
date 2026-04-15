@@ -129,6 +129,15 @@ const Outbound: React.FC = () => {
     setIsCameraOpen(false);
   };
 
+  // Stop camera when component unmounts to release device resources
+  useEffect(() => {
+    return () => {
+      if (html5QrCodeRef.current) {
+        html5QrCodeRef.current.stop().catch(() => {});
+        html5QrCodeRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // Auto-focus on scan input when an order is active
@@ -589,7 +598,7 @@ const Outbound: React.FC = () => {
     }
   };
 
-  const isOrderComplete = itemsState.every(i => i.scannedQty === i.requiredQty);
+  const isOrderComplete = itemsState.length > 0 && itemsState.every(i => i.scannedQty === i.requiredQty);
   
   const handleFinalize = async () => {
     if (!activeOrder || !isOrderComplete) return;
