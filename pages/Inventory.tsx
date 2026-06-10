@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { inventoryService } from '../services/inventoryService';
 import { Product } from '../types';
-import { Search, Filter, ArrowUpDown, Plus } from 'lucide-react';
+import { Search, Filter, ArrowUpDown, Plus, RefreshCw, AlertTriangle } from 'lucide-react';
 import Papa from "papaparse";
 
 const Inventory: React.FC = () => {
@@ -19,6 +19,12 @@ const Inventory: React.FC = () => {
   const [newCategory, setNewCategory] = useState('');
   const [newStock, setNewStock] = useState(0);
 
+  // 아임웹 동기화 / 대조 상태
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState<any[] | null>(null);
+
   // ✏️ 제품 수정 상태
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editSku, setEditSku] = useState('');
@@ -27,6 +33,7 @@ const Inventory: React.FC = () => {
   const [editStock, setEditStock] = useState(0);
   const [editImage, setEditImage] = useState('');
   const [editLink, setEditLink] = useState('');
+  const [editImwebProdNo, setEditImwebProdNo] = useState('');
 
   // 🔹 데이터 로드
   const loadProducts = async () => {
@@ -118,6 +125,10 @@ const Inventory: React.FC = () => {
       link: editLink
     });
 
+    if (editImwebProdNo !== ((editingProduct as any).imwebProdNo || '')) {
+      await inventoryService.updateImwebProdNo(originalSku, editImwebProdNo);
+    }
+
     setEditingProduct(null);
     await loadProducts();
   };
@@ -147,6 +158,34 @@ const Inventory: React.FC = () => {
         alert("CSV 업로드 완료");
       }
     });
+  };
+
+  // 아임웹 상품 동기화
+  const handleImwebSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await inventoryService.syncFromImweb();
+      setSyncResult(`동기화 완료: ${result.synced}개 상품 업데이트 (전체 ${result.total}개)`);
+    } catch (e: any) {
+      setSyncResult(`오류: ${e.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // 아임웹 재고 대조
+  const handleReconcile = async () => {
+    setReconciling(true);
+    setReconcileResult(null);
+    try {
+      const result = await inventoryService.reconcileWithImweb();
+      setReconcileResult(result.discrepancies ?? []);
+    } catch (e: any) {
+      alert(`대조 오류: ${e.message}`);
+    } finally {
+      setReconciling(false);
+    }
   };
 
   // 📤 CSV 다운로드
@@ -193,6 +232,24 @@ const Inventory: React.FC = () => {
           </div>
 
           <button
+            onClick={handleImwebSync}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 disabled:bg-indigo-300"
+          >
+            <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
+            {syncing ? "동기화 중..." : "아임웹 동기화"}
+          </button>
+
+          <button
+            onClick={handleReconcile}
+            disabled={reconciling}
+            className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 disabled:bg-orange-300"
+          >
+            <AlertTriangle size={16} />
+            {reconciling ? "대조 중..." : "재고 대조"}
+          </button>
+
+          <button
             onClick={() => setShowAddForm(!showAddForm)}
             className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600"
           >
@@ -225,6 +282,65 @@ const Inventory: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* 동기화 결과 */}
+      {syncResult && (
+        <div className={`px-6 py-3 text-sm border-b ${syncResult.startsWith('오류') ? 'bg-red-50 text-red-700 border-red-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+          {syncResult}
+        </div>
+      )}
+
+      {/* 재고 대조 결과 */}
+      {reconcileResult !== null && (
+        <div className="p-4 border-b border-slate-200 bg-orange-50">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={16} className="text-orange-600" />
+            <span className="font-semibold text-orange-800 text-sm">
+              재고 대조 결과 — 차이 발생 항목: {reconcileResult.length}개
+            </span>
+            <button onClick={() => setReconcileResult(null)} className="ml-auto text-xs text-slate-400 hover:text-slate-600">닫기</button>
+          </div>
+          {reconcileResult.length === 0 ? (
+            <p className="text-sm text-green-700">모든 항목이 일치합니다.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-slate-500 border-b border-orange-200">
+                    <th className="pb-2 pr-4">상품명</th>
+                    <th className="pb-2 pr-4">아임웹 재고</th>
+                    <th className="pb-2 pr-4">ERP 재고</th>
+                    <th className="pb-2 pr-4">차이</th>
+                    <th className="pb-2">상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reconcileResult.map((item) => (
+                    <tr key={item.prod_no} className="border-b border-orange-100">
+                      <td className="py-1.5 pr-4 font-medium text-slate-800">{item.name}</td>
+                      <td className="py-1.5 pr-4">{item.imweb_stock}</td>
+                      <td className="py-1.5 pr-4">{item.erp_stock}</td>
+                      <td className={`py-1.5 pr-4 font-bold ${item.diff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {item.diff > 0 ? `+${item.diff}` : item.diff}
+                      </td>
+                      <td className="py-1.5">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          item.status === 'ERP_EXCESS' ? 'bg-green-100 text-green-700' :
+                          item.status === 'IMWEB_EXCESS' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>
+                          {item.status === 'ERP_EXCESS' ? 'ERP 초과' :
+                           item.status === 'IMWEB_EXCESS' ? '아임웹 초과' : item.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 🔥 제품 추가 폼 */}
       {showAddForm && (
@@ -290,6 +406,7 @@ const Inventory: React.FC = () => {
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b">SKU</th>
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b">제품명</th>
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b">카테고리</th>
+              <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b">아임웹 상품번호</th>
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b text-right">현재 재고</th>
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b text-right">상태</th>
               <th className="px-6 py-4 text-sm font-semibold text-slate-500 border-b text-right">마지막 업데이트</th>
@@ -346,6 +463,15 @@ const Inventory: React.FC = () => {
                       {product.category}
                     </span>
                   </td>
+                  <td className="px-6 py-4 text-sm text-slate-500">
+                    {(product as any).imwebProdNo ? (
+                      <span className="font-mono text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded">
+                        {(product as any).imwebProdNo}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-300">미연결</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-sm text-right font-bold text-slate-800">
                     {stock.toLocaleString()}
                   </td>
@@ -374,6 +500,7 @@ const Inventory: React.FC = () => {
                           setEditStock(product.stock || 0);
                           setEditImage((product as any).image || '');
                           setEditLink((product as any).link || '');
+                          setEditImwebProdNo((product as any).imwebProdNo || '');
                         }}
                         className="px-3 py-1 bg-slate-800 text-white rounded text-xs hover:bg-slate-900"
                       >
@@ -453,6 +580,18 @@ const Inventory: React.FC = () => {
               placeholder="제품 링크 URL"
               className="w-full border rounded px-3 py-2 text-sm"
             />
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">아임웹 상품번호</label>
+              <input
+                type="text"
+                value={editImwebProdNo}
+                onChange={(e) => setEditImwebProdNo(e.target.value)}
+                placeholder="예: 12345678 (아임웹 prod_no)"
+                className="w-full border rounded px-3 py-2 text-sm font-mono"
+              />
+              <p className="text-xs text-slate-400 mt-1">입력하면 아임웹 주문 수신 시 이 SKU로 자동 매칭됩니다.</p>
+            </div>
 
             {editImage && (
               <img

@@ -1294,6 +1294,14 @@ class InventoryService {
     await batch.commit();
     console.log("✅ 기존 로그 마이그레이션 완료");
   }
+  async updateImwebProdNo(sku: string, imwebProdNo: string) {
+    const ref = doc(db, "inventory", sku.trim().toUpperCase());
+    await updateDoc(ref, {
+      imwebProdNo: imwebProdNo.trim(),
+      lastUpdated: serverTimestamp()
+    });
+  }
+
   // 🗑 단일 상품 삭제
   async deleteProduct(sku: string) {
     const normalizedSku = sku.trim().toUpperCase();
@@ -1956,6 +1964,75 @@ class InventoryService {
       console.error("배송 타입 변경 실패:", error);
       return false;
     }
+  }
+
+  private productCatalogCache: any[] | null = null;
+
+  async getProductCatalog(): Promise<any[]> {
+    if (this.productCatalogCache) return this.productCatalogCache;
+    const snapshot = await getDocs(collection(db, "products"));
+    this.productCatalogCache = snapshot.docs.map(d => ({ prod_no: d.id, ...d.data() }));
+    return this.productCatalogCache;
+  }
+
+  clearProductCatalogCache() {
+    this.productCatalogCache = null;
+  }
+
+  async syncFromImweb(): Promise<{ synced: number; skipped: number; total: number }> {
+    const serverUrl = import.meta.env.VITE_WEBHOOK_SERVER_URL;
+    const secret = import.meta.env.VITE_TEST_SECRET;
+    if (!serverUrl || !secret) throw new Error("VITE_WEBHOOK_SERVER_URL 또는 VITE_TEST_SECRET 미설정");
+
+    const res = await fetch(`${serverUrl}/api/sync-products`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-test-secret": secret }
+    });
+
+    if (!res.ok) throw new Error(`동기화 실패: ${res.status}`);
+    this.clearProductCatalogCache();
+    return res.json();
+  }
+
+  async getOrCreateInventoryItem(prodNo: string, productData: { name: string }) {
+    const id = prodNo.trim();
+    const ref = doc(db, "inventory", id);
+    const snap = await getDoc(ref);
+
+    if (snap.exists()) {
+      return { sku: snap.id, ...snap.data() };
+    }
+
+    await setDoc(ref, {
+      name: productData.name,
+      category: "",
+      stock: 0,
+      link: "",
+      imwebProdNo: id,
+      lowStockThreshold: 10,
+      createdAt: serverTimestamp(),
+      lastUpdated: serverTimestamp()
+    });
+
+    return { sku: id, name: productData.name, stock: 0 };
+  }
+
+  async reconcileWithImweb(): Promise<{
+    discrepancies: { prod_no: string; name: string; imweb_stock: number; erp_stock: number; diff: number; status: string }[];
+    matched: number;
+    total: number;
+  }> {
+    const serverUrl = import.meta.env.VITE_WEBHOOK_SERVER_URL;
+    const secret = import.meta.env.VITE_TEST_SECRET;
+    if (!serverUrl || !secret) throw new Error("VITE_WEBHOOK_SERVER_URL 또는 VITE_TEST_SECRET 미설정");
+
+    const res = await fetch(`${serverUrl}/api/stock-reconcile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-test-secret": secret }
+    });
+
+    if (!res.ok) throw new Error(`대조 실패: ${res.status}`);
+    return res.json();
   }
 }
 
