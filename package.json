@@ -9,7 +9,13 @@
     "build:staging": "vite build --mode staging",
     "preview": "vite preview",
     "deploy:staging": "npm run build:staging && firebase hosting:channel:deploy dev --expires 30d",
-    "deploy:prod": "npm run build && firebase deploy --only hosting"
+    "deploy:prod": "npm run build && firebase deploy --only hosting",
+    "emulators": "firebase emulators:start --only firestore",
+    "test:smoke": "USE_FIRESTORE_EMULATOR=true tsx scripts/smoke-test.ts",
+    "test:rules": "tsx scripts/rules-test.ts",
+    "test:smoke:ci": "firebase emulators:exec --only firestore \"npm run test:smoke\"",
+    "test:rules:ci": "firebase emulators:exec --only firestore \"npm run test:rules\"",
+    "test:all": "firebase emulators:exec --only firestore \"npm run test:smoke && npm run test:rules\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",
@@ -23,10 +29,12 @@
     "tailwindcss": "^4.2.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.24",
     "postcss": "^8.5.6",
+    "tsx": "^4.23.12",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
