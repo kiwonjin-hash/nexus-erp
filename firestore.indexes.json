@@ -1,0 +1,47 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "deliveryType", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "trackingNumbers", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "deliveryType", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "tracking", "order": "ASCENDING" },
+        { "fieldPath": "deliveryType", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "trackingNumbers", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shipments",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "tracking", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

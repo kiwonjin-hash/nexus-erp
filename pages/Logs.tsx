@@ -629,6 +629,13 @@ const Logs: React.FC = () => {
                         <div>
                           <b>SKU:</b> {item.sku || "(없음)"}
                         </div>
+                        {item.prod_no && (
+                          <div>
+                            <b>아임웹 상품번호:</b>{" "}
+                            <span className="font-mono text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded">{item.prod_no}</span>
+                            <span className="text-xs text-slate-400 ml-1">(연결 시 자동 저장됨)</span>
+                          </div>
+                        )}
                         <div><b>수량:</b> {item.qty}</div>
                         <div><b>사유:</b> {item.reason}</div>
 

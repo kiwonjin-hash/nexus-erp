@@ -3,7 +3,7 @@ import Layout from './components/Layout';
 import { PageView } from './types';
 import Dashboard from './pages/Dashboard';
 import Inbound from './pages/Inbound';
-import Outbound from './pages/Outbound';
+import Outbound from './pages/outbound';
 import Inventory from './pages/Inventory';
 import Logs from './pages/Logs';
 

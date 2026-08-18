@@ -43,3 +43,13 @@ export interface LogEntry {
 }
 
 export type PageView = 'DASHBOARD' | 'INBOUND' | 'OUTBOUND' | 'INVENTORY' | 'LOGS';
+
+export interface ImwebProduct {
+  prod_no: string;
+  name: string;
+  code: string;
+  price: number;
+  stock_count: number;
+  options: { opt_code: string; opt_name: string; price: number }[];
+  syncedAt?: any;
+}

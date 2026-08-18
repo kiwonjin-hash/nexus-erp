@@ -35,6 +35,24 @@ const Inventory: React.FC = () => {
   const [editLink, setEditLink] = useState('');
   const [editImwebProdNo, setEditImwebProdNo] = useState('');
 
+  // 📒 재고 변동 이력 상태
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
+  const [historyRows, setHistoryRows] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const openStockHistory = async (product: Product) => {
+    setHistoryProduct(product);
+    setHistoryLoading(true);
+    try {
+      const rows = await inventoryService.getStockHistory(product.sku);
+      setHistoryRows(rows);
+    } catch (e) {
+      console.error("이력 조회 실패:", e);
+      setHistoryRows([]);
+    }
+    setHistoryLoading(false);
+  };
+
   // 🔹 데이터 로드
   const loadProducts = async () => {
     const data = await inventoryService.getProducts();
@@ -492,6 +510,13 @@ const Inventory: React.FC = () => {
                   <td className="px-6 py-4 text-sm text-right">
                     <div className="flex justify-end gap-2">
                       <button
+                        onClick={() => openStockHistory(product)}
+                        className="px-3 py-1 bg-indigo-500 text-white rounded text-xs hover:bg-indigo-600"
+                      >
+                        이력
+                      </button>
+
+                      <button
                         onClick={() => {
                           setEditingProduct(product);
                           setEditSku(product.sku);
@@ -527,6 +552,103 @@ const Inventory: React.FC = () => {
         <span>Showing {filteredProducts.length} items</span>
         <span>Page 1 of 1</span>
       </div>
+
+      {/* 📒 재고 변동 이력 모달 */}
+      {historyProduct && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white w-full max-w-3xl rounded-xl p-6 shadow-xl space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-lg font-bold">재고 변동 이력</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded mr-2">{historyProduct.sku}</span>
+                  {historyProduct.name}
+                  <span className="ml-2 font-bold text-slate-800">현재 재고 {(historyProduct.stock ?? 0).toLocaleString()}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => { setHistoryProduct(null); setHistoryRows([]); }}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="overflow-auto flex-1 border rounded">
+              {historyLoading ? (
+                <div className="p-8 text-center text-sm text-slate-400">불러오는 중...</div>
+              ) : historyRows.length === 0 ? (
+                <div className="p-8 text-center text-sm text-slate-400">
+                  변동 이력이 없습니다.
+                  <div className="text-xs mt-1">(이력 기록 기능 도입 이후의 변동만 표시됩니다)</div>
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">일시</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">유형</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-500">변동</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">출처</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">주문번호</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">담당자</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-500">메모</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {historyRows.map((row) => {
+                      const sourceLabels: Record<string, string> = {
+                        INBOUND_PAGE: "입고 페이지",
+                        ORDER_COMPLETE: "주문 출고",
+                        LINK_MATCH: "미매칭 연결",
+                        BULK_MATCH: "일괄 매칭",
+                        MANUAL_EDIT: "직접 수정",
+                        MANUAL: "수동 조정",
+                        IMWEB_SYNC: "아임웹 동기화",
+                        IMWEB_SYNC_INIT: "아임웹 초기 등록"
+                      };
+                      const typeBadge =
+                        row.type === "INBOUND"
+                          ? "bg-green-100 text-green-700"
+                          : row.type === "OUTBOUND"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-amber-100 text-amber-700";
+                      const typeLabel =
+                        row.type === "INBOUND" ? "입고" : row.type === "OUTBOUND" ? "출고" : "조정";
+
+                      return (
+                        <tr key={row.id} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                            {row.createdAt?.seconds
+                              ? new Date(row.createdAt.seconds * 1000).toLocaleString()
+                              : "-"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full font-medium ${typeBadge}`}>
+                              {typeLabel}
+                            </span>
+                          </td>
+                          <td className={`px-3 py-2 text-right font-bold ${row.delta > 0 ? "text-green-600" : "text-red-600"}`}>
+                            {row.delta > 0 ? `+${row.delta}` : row.delta}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600">{sourceLabels[row.source] || row.source}</td>
+                          <td className="px-3 py-2 font-mono text-slate-500">{row.orderId || "-"}</td>
+                          <td className="px-3 py-2 text-slate-600">{row.operator || "-"}</td>
+                          <td className="px-3 py-2 text-slate-500">{row.memo || "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="text-xs text-slate-400">
+              총 {historyRows.length}건 · 기록은 수정/삭제할 수 없습니다 (감사 추적)
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ✏️ 제품 수정 모달 */}
       {editingProduct && (

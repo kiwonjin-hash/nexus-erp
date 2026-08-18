@@ -302,7 +302,34 @@ class InventoryService {
   }
 
   async updateProduct(sku: string, data: any) {
-    const ref = doc(db, "inventory", sku.trim().toUpperCase());
+    const normalizedSku = sku.trim().toUpperCase();
+    const ref = doc(db, "inventory", normalizedSku);
+
+    // 재고를 직접 수정하는 경우 변동량을 원장에 기록
+    if (data.stock !== undefined) {
+      const snap = await getDoc(ref);
+      const prevStock = Number(snap.data()?.stock ?? 0);
+      const newStock = Number(data.stock ?? 0);
+      const delta = newStock - prevStock;
+
+      if (delta !== 0) {
+        await addDoc(collection(db, "stock_logs"), {
+          sku: normalizedSku,
+          delta,
+          type: "ADJUSTMENT",
+          source: "MANUAL_EDIT",
+          operator:
+            (typeof window !== "undefined" &&
+              window.localStorage &&
+              localStorage.getItem("operatorName")) ||
+            "",
+          orderId: "",
+          memo: `직접 수정 ${prevStock} → ${newStock}`,
+          createdAt: serverTimestamp()
+        });
+      }
+    }
+
     await updateDoc(ref, {
       ...data,
       lastUpdated: serverTimestamp()
@@ -311,13 +338,9 @@ class InventoryService {
 
   async addInbound(sku: string, quantity: number, operator: string) {
     try {
-      const ref = doc(db, "inventory", sku.trim().toUpperCase());
+      await this.adjustStock(sku, quantity, "INBOUND", "INBOUND_PAGE", { operator });
 
-      await updateDoc(ref, {
-        stock: increment(quantity),
-        lastUpdated: serverTimestamp()
-      });
-
+      // 기존 입고 이력 UI(getInboundHistory)가 읽는 로그 — 유지
       await addDoc(collection(db, "logs"), {
         type: "INBOUND",
         sku,
@@ -359,14 +382,79 @@ class InventoryService {
     );
   }
 
+  /**
+   * 🔐 모든 재고 변동의 단일 통로 (원장 패턴)
+   * stock 변경(increment)과 stock_logs 감사 기록을 writeBatch로 원자 처리
+   * delta: 양수 = 증가, 음수 = 감소
+   */
+  async adjustStock(
+    sku: string,
+    delta: number,
+    type: "INBOUND" | "OUTBOUND" | "ADJUSTMENT",
+    source: string,
+    meta: { operator?: string; orderId?: string; memo?: string } = {}
+  ) {
+    const normalizedSku = sku.trim().toUpperCase();
+    const qty = Number(delta);
+    if (!normalizedSku || !Number.isFinite(qty) || qty === 0) return;
+
+    const batch = writeBatch(db);
+
+    batch.update(doc(db, "inventory", normalizedSku), {
+      stock: increment(qty),
+      lastUpdated: serverTimestamp()
+    });
+
+    batch.set(doc(collection(db, "stock_logs")), {
+      sku: normalizedSku,
+      delta: qty,
+      type,
+      source,
+      operator: meta.operator || "",
+      orderId: meta.orderId || "",
+      memo: meta.memo || "",
+      createdAt: serverTimestamp()
+    });
+
+    await batch.commit();
+  }
+
+  /**
+   * 특정 SKU의 재고 변동 이력 조회 (stock_logs 원장)
+   * orderBy 없이 조회 후 클라이언트 정렬 — 복합 인덱스 불필요
+   */
+  async getStockHistory(sku: string) {
+    const normalizedSku = sku.trim().toUpperCase();
+    const q = query(
+      collection(db, "stock_logs"),
+      where("sku", "==", normalizedSku)
+    );
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs
+      .map(docSnap => {
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          sku: data.sku || "",
+          delta: Number(data.delta || 0),
+          type: data.type || "",
+          source: data.source || "",
+          operator: data.operator || "",
+          orderId: data.orderId || "",
+          memo: data.memo || "",
+          createdAt: data.createdAt || null
+        };
+      })
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  }
+
   async increaseStock(sku: string, qty: number) {
-    const ref = doc(db, "inventory", sku.trim().toUpperCase());
-    await updateDoc(ref, { stock: increment(qty) });
+    await this.adjustStock(sku, qty, "ADJUSTMENT", "MANUAL");
   }
 
   async decreaseStock(sku: string, qty: number) {
-    const ref = doc(db, "inventory", sku.trim().toUpperCase());
-    await updateDoc(ref, { stock: increment(-qty) });
+    await this.adjustStock(sku, -qty, "ADJUSTMENT", "MANUAL");
   }
 
   async completeOrder(
@@ -436,10 +524,7 @@ class InventoryService {
         });
 
         // 🔥 재고 부족이어도 막지 않고 그대로 차감 (마이너스 허용)
-        await updateDoc(productRef, {
-          stock: increment(-qty),
-          lastUpdated: serverTimestamp()
-        });
+        await this.adjustStock(normalizedSku, -qty, "OUTBOUND", "ORDER_COMPLETE", { orderId });
       }
 
       const orderRef = doc(db, "orders", orderId);
@@ -1379,17 +1464,28 @@ class InventoryService {
         throw new Error("연결할 SKU가 존재하지 않습니다.");
       }
 
-      // 🔹 재고 차감 실행
-      await updateDoc(productRef, {
-        stock: increment(-Number(item.qty || 0))
-      });
-
-      // 🔹 로그의 items 배열에도 실제 상품 정보 반영 (제품명이 빈칸으로 보이는 문제 방지)
-      const items = logData.items || [];
-
       const productData: any = productSnap.data() || {};
       const productName = productData.name || "";
       const productLink = productData.link || "";
+
+      // 🔹 재고 차감 실행 (원장 기록 포함)
+      await this.adjustStock(
+        normalizedSku,
+        -Number(item.qty || 0),
+        "OUTBOUND",
+        "LINK_MATCH",
+        { orderId: String(logData.orderId || "") }
+      );
+
+      // prod_no가 있으면 imwebProdNo 자동 저장 (다음 주문부터 자동 매칭)
+      const itemProdNo = String(item.prod_no || "").trim();
+      const existingProdNo = String(productData.imwebProdNo || "").trim();
+      if (itemProdNo && !existingProdNo) {
+        await updateDoc(productRef, { imwebProdNo: itemProdNo });
+      }
+
+      // 🔹 로그의 items 배열에도 실제 상품 정보 반영 (제품명이 빈칸으로 보이는 문제 방지)
+      const items = logData.items || [];
 
       this.replaceUnmatchedPlaceholderItem(
         items,
@@ -1548,9 +1644,8 @@ class InventoryService {
         };
       }
 
-      await updateDoc(productRef, {
-        stock: increment(-totalMatchedQty),
-        lastUpdated: serverTimestamp()
+      await this.adjustStock(normalizedSku, -totalMatchedQty, "OUTBOUND", "BULK_MATCH", {
+        memo: `일괄 매칭 ${matchedTargets.length}건`
       });
 
       const batch = writeBatch(db);
