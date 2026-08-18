@@ -215,8 +215,8 @@ async function cleanup() {
     for (const d of snap.docs) await deleteDoc(d.ref).catch(() => {});
   }
 
-  const stockLogsSnap = await getDocs(query(collection(db, "stock_logs"), where("sku", "==", TEST_SKU)));
-  for (const d of stockLogsSnap.docs) await deleteDoc(d.ref).catch(() => {});
+  // stock_logs는 firestore.rules에서 delete를 항상 거부한다 (원장 불변성) — 의도된 동작이라
+  // 지우려 시도하지 않는다. 에뮬레이터는 실행마다 초기화되므로 테스트 stock_logs가 남아도 무해하다.
 }
 
 async function main() {
