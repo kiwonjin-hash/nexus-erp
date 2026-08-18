@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  LayoutDashboard, 
-  PackagePlus, 
-  PackageCheck, 
-  Boxes, 
-  History, 
-  LogOut 
+import React, { useState } from 'react';
+import {
+  LayoutDashboard,
+  PackagePlus,
+  PackageCheck,
+  Boxes,
+  History,
+  LogOut
 } from 'lucide-react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 import { PageView } from '../types';
 
 interface LayoutProps {
@@ -18,13 +20,11 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) => {
   
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const operatorLabel = auth.currentUser?.email || auth.currentUser?.displayName || '';
 
-  const [operatorName, setOperatorName] = useState('');
-
-  useEffect(() => {
-    const saved = localStorage.getItem('operatorName');
-    if (saved) setOperatorName(saved);
-  }, []);
+  const handleLogout = () => {
+    signOut(auth);
+  };
 
   const navItems = [
     { id: 'DASHBOARD' as PageView, label: '대시보드', icon: LayoutDashboard },
@@ -80,10 +80,13 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
         </nav>
 
         <div className="p-4 border-t border-slate-800">
-          <div className="flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white cursor-pointer transition-colors">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white cursor-pointer transition-colors"
+          >
             <LogOut size={16} />
             <span className="text-sm font-medium">로그아웃</span>
-          </div>
+          </button>
           <div className="mt-4 px-4">
             <div className="text-xs text-slate-500">Warehouse ID: WH-KR-01</div>
             <div className="text-xs text-slate-500">v1.0.4 (Stable)</div>
@@ -109,19 +112,10 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onNavigate }) =>
             </h1>
           </div>
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs">
-              {operatorName ? operatorName.charAt(0).toUpperCase() : 'AD'}
+            <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs shrink-0">
+              {operatorLabel ? operatorLabel.charAt(0).toUpperCase() : 'AD'}
             </div>
-            <input
-              value={operatorName}
-              onChange={(e) => {
-                const value = e.target.value;
-                setOperatorName(value);
-                localStorage.setItem('operatorName', value);
-              }}
-              placeholder="작업자 이름 입력"
-              className="text-sm px-3 py-1 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
-            />
+            <span className="text-sm text-slate-600">{operatorLabel}</span>
           </div>
         </header>
 

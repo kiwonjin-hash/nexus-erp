@@ -38,7 +38,8 @@ import {
   where,
   getDocs
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { signInAnonymously } from "firebase/auth";
+import { db, auth } from "../firebase";
 import { inventoryService } from "../services/inventoryService";
 
 const RUN_ID = Date.now();
@@ -221,6 +222,10 @@ async function cleanup() {
 
 async function main() {
   console.log(`🧪 스모크 테스트 시작 (RUN_ID=${RUN_ID}, 에뮬레이터 대상)\n`);
+
+  // firestore.rules가 request.auth != null을 요구하므로, 실제 로그인 계정 없이도
+  // Auth 에뮬레이터의 익명 로그인으로 인증 상태를 만든다 (프로덕션 rules와는 무관 — 에뮬레이터 전용).
+  await signInAnonymously(auth);
 
   try {
     await seed();

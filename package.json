@@ -10,12 +10,12 @@
     "preview": "vite preview",
     "deploy:staging": "npm run build:staging && firebase hosting:channel:deploy dev --expires 30d",
     "deploy:prod": "npm run build && firebase deploy --only hosting",
-    "emulators": "firebase emulators:start --only firestore",
+    "emulators": "firebase emulators:start --only firestore,auth",
     "test:smoke": "USE_FIRESTORE_EMULATOR=true tsx scripts/smoke-test.ts",
     "test:rules": "tsx scripts/rules-test.ts",
-    "test:smoke:ci": "firebase emulators:exec --only firestore \"npm run test:smoke\"",
+    "test:smoke:ci": "firebase emulators:exec --only firestore,auth \"npm run test:smoke\"",
     "test:rules:ci": "firebase emulators:exec --only firestore \"npm run test:rules\"",
-    "test:all": "firebase emulators:exec --only firestore \"npm run test:smoke && npm run test:rules\""
+    "test:all": "firebase emulators:exec --only firestore,auth \"npm run test:smoke && npm run test:rules\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",

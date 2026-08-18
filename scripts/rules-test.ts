@@ -5,10 +5,12 @@
  * Auth 도입처럼 rules를 바꾸는 작업은 배포 즉시 실사용 중인 앱에 영향을 주므로,
  * 배포 전에 여기서 먼저 통과시키는 것이 유일한 안전장치다.
  *
- * ⚠️ 지금 이 파일은 "현재 rules"(=인증 없이 전체 허용, stock_logs만 immutable)의
- * 동작을 그대로 문서화한 것이다. Auth를 붙이고 firestore.rules를 강화하면
- * 아래 "인증 없이 허용됨" 계열 assertSucceeds들은 의도적으로 실패해야 정상이다 —
- * 그때 이 파일도 함께 업데이트할 것 (DEPLOY_CHECKLIST.md 1항 참고).
+ * 2026-08-18: Auth 도입으로 rules가 request.auth != null 기준으로 강화됨에 따라
+ * 이 테스트도 함께 갱신했다 — 미인증 요청은 이제 전부 거부되고, 로그인한 사용자는
+ * 여전히 전체 접근 가능해야 한다 (역할 구분 없음).
+ *
+ * 참고: 웹훅 서버(재고관리 웹훅/)는 Firebase Admin SDK로 붙어서 이 rules 자체를 우회한다 —
+ * 여기서 검증하는 대상이 아니다 (Admin SDK는 애초에 rules 평가를 받지 않음).
  *
  * 실행법:
  *   firebase emulators:start --only firestore
@@ -62,25 +64,49 @@ async function main() {
 
   await testEnv.clearFirestore();
   const anon = testEnv.unauthenticatedContext().firestore();
+  const staff = testEnv.authenticatedContext("staff-uid").firestore();
 
-  // --- 현재 상태: 인증 없이도 inventory/orders/logs/products 전부 허용 ---
-  await expectSucceeds(
-    "[현재 정책] 인증 없이 inventory 쓰기 허용됨",
+  // --- 미인증: 전부 거부되어야 함 ---
+  await expectFails(
+    "미인증 상태로 inventory 쓰기 거부됨",
     setDoc(doc(anon, "inventory", "RULES_TEST_SKU"), { name: "test", stock: 1 })
   );
-  await expectSucceeds(
-    "[현재 정책] 인증 없이 orders 쓰기 허용됨",
+  await expectFails(
+    "미인증 상태로 orders 쓰기 거부됨",
     setDoc(doc(anon, "orders", "RULES_TEST_ORDER"), { status: "READY" })
   );
-  await expectSucceeds(
-    "[현재 정책] 인증 없이 logs 읽기 허용됨",
+  await expectFails(
+    "미인증 상태로 logs 읽기 거부됨",
     getDoc(doc(anon, "logs", "nonexistent"))
   );
+  await expectFails(
+    "미인증 상태로 stock_logs 생성도 거부됨",
+    setDoc(doc(anon, "stock_logs", "RULES_TEST_LOG_ANON"), {
+      sku: "RULES_TEST_SKU",
+      delta: 1,
+      type: "ADJUSTMENT",
+      source: "RULES_TEST"
+    })
+  );
 
-  // --- stock_logs immutability: Auth 유무와 무관하게 항상 지켜져야 하는 불변식 ---
+  // --- 로그인 상태: 역할 구분 없이 전체 접근 허용 ---
   await expectSucceeds(
-    "stock_logs 생성(create)은 허용됨",
-    setDoc(doc(anon, "stock_logs", "RULES_TEST_LOG"), {
+    "로그인 상태로 inventory 쓰기 허용됨",
+    setDoc(doc(staff, "inventory", "RULES_TEST_SKU"), { name: "test", stock: 1 })
+  );
+  await expectSucceeds(
+    "로그인 상태로 orders 쓰기 허용됨",
+    setDoc(doc(staff, "orders", "RULES_TEST_ORDER"), { status: "READY" })
+  );
+  await expectSucceeds(
+    "로그인 상태로 logs 읽기 허용됨",
+    getDoc(doc(staff, "logs", "nonexistent"))
+  );
+
+  // --- stock_logs immutability: 로그인해도 update/delete는 항상 거부되는 불변식 ---
+  await expectSucceeds(
+    "로그인 상태로 stock_logs 생성(create)은 허용됨",
+    setDoc(doc(staff, "stock_logs", "RULES_TEST_LOG"), {
       sku: "RULES_TEST_SKU",
       delta: 1,
       type: "ADJUSTMENT",
@@ -88,12 +114,12 @@ async function main() {
     })
   );
   await expectFails(
-    "stock_logs 수정(update)은 항상 거부됨 — 원장 불변성",
-    updateDoc(doc(anon, "stock_logs", "RULES_TEST_LOG"), { delta: 999 })
+    "로그인해도 stock_logs 수정(update)은 항상 거부됨 — 원장 불변성",
+    updateDoc(doc(staff, "stock_logs", "RULES_TEST_LOG"), { delta: 999 })
   );
   await expectFails(
-    "stock_logs 삭제(delete)는 항상 거부됨 — 원장 불변성",
-    deleteDoc(doc(anon, "stock_logs", "RULES_TEST_LOG"))
+    "로그인해도 stock_logs 삭제(delete)는 항상 거부됨 — 원장 불변성",
+    deleteDoc(doc(staff, "stock_logs", "RULES_TEST_LOG"))
   );
 
   await testEnv.clearFirestore();

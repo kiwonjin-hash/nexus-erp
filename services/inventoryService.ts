@@ -20,7 +20,7 @@ import {
   writeBatch
 } from "firebase/firestore";
 
-import { db } from "../firebase";
+import { db, getCurrentOperator } from "../firebase";
 import { Product } from "../types";
 
 class InventoryService {
@@ -318,11 +318,7 @@ class InventoryService {
           delta,
           type: "ADJUSTMENT",
           source: "MANUAL_EDIT",
-          operator:
-            (typeof window !== "undefined" &&
-              window.localStorage &&
-              localStorage.getItem("operatorName")) ||
-            "",
+          operator: getCurrentOperator(),
           orderId: "",
           memo: `직접 수정 ${prevStock} → ${newStock}`,
           createdAt: serverTimestamp()
@@ -694,11 +690,7 @@ class InventoryService {
         deliveryType: deliveryType,
         orderId,
         mergedOrderIds,
-        operator:
-          (typeof window !== "undefined" &&
-            window.localStorage &&
-            localStorage.getItem("operatorName")) ||
-          "Unknown",
+        operator: getCurrentOperator() || "Unknown",
         customerName: resolvedCustomerName,
         customerNameLower: resolvedCustomerName.toLowerCase(),
         customerPhone: resolvedPhone,

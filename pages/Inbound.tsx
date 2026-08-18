@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { inventoryService } from '../services/inventoryService';
+import { getCurrentOperator } from '../firebase';
 import { InboundRecord } from '../types';
 import { Search, Save, Clock, PackageCheck } from 'lucide-react';
 
@@ -83,7 +84,7 @@ const Inbound: React.FC = () => {
     const success = await inventoryService.addInbound(
       selectedProduct.prod_no,
       Number(quantityInput),
-      'Admin User'
+      getCurrentOperator() || 'Unknown'
     );
 
     if (success) {

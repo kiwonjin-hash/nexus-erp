@@ -47,8 +47,9 @@ npm run test:smoke      # 이 터미널에서
 | `services/inventoryService.ts` | 모든 Firestore 읽기/쓰기가 모이는 곳. 재고 변경은 반드시 `adjustStock()`을 거친다 |
 | `scripts/smoke-test.ts`, `scripts/rules-test.ts` | 배포 전 검증 하네스 |
 | `scripts/one-off/` | 과거 1회성 데이터 수정 스크립트 (재실행 금지, `scripts/one-off/README.md` 참고) |
-| `firebase.ts` | Firestore 클라이언트 초기화 |
-| `firestore.rules` | 접근 권한 규칙 — 현재 인증 미구현으로 임시 전체 허용 상태 (남은 작업, SYSTEM_OVERVIEW.md 참고) |
+| `pages/Login.tsx` | 로그인 화면 (이메일/비밀번호). 계정은 Firebase 콘솔에서 수동 발급 — 셀프 가입 없음 |
+| `firebase.ts` | Firestore/Auth 클라이언트 초기화, `getCurrentOperator()` (로그인 계정 기반 담당자 라벨) |
+| `firestore.rules` | 접근 권한 규칙 — 로그인(`request.auth != null`)하면 역할 구분 없이 전체 접근 |
 
 ## 환경변수 (`.env.local`)
 
